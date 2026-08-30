@@ -1,0 +1,431 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ══════════════════════════ TENANCY ══════════════════════════
+enum Platform {
+  DISCORD
+  SLACK
+}
+
+model Workspace {
+  id               String   @id @default(uuid())
+  platform         Platform @default(DISCORD)
+  workspaceId      String // Discord Guild ID / Slack Team ID
+  organizationName String   @default("My Organization")
+  timezone         String   @default("UTC")
+  currency         String   @default("USD")
+
+  // Channel mappings (platform-specific IDs)
+  reminderChannelId String?
+  logChannelId      String?
+  scheduleChannelId String?
+  vacationChannelId String?
+  welcomeChannelId  String?
+  introChannelId    String?
+  billingChannelId  String?
+  leadsChannelId    String?
+  autoRoleId        String?
+
+  // Tenant-level secrets (encrypted by the app layer, optional)
+  aiApiKey String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  roles        Role[]
+  employees    Employee[]
+  tasks        Task[]
+  appointments Appointment[]
+  events       Event[]
+  leads        Lead[]
+  campaigns    Campaign[]
+  invoices     Invoice[]
+  auditLogs    AuditLog[]
+
+  @@unique([platform, workspaceId])
+}
+
+model Role {
+  id          String   @id @default(uuid())
+  workspaceId String
+  workspace   Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  name        String
+  description String?
+  createdAt   DateTime @default(now())
+
+  employees Employee[]
+
+  @@unique([workspaceId, name])
+}
+
+model Employee {
+  id          String   @id @default(uuid())
+  workspaceId String
+  workspace   Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  name        String
+  email       String
+  phone       String?
+  externalId  String? // Discord / Slack user ID (platform-agnostic)
+  roleId      String?
+  role        Role?    @relation(fields: [roleId], references: [id])
+  isActive    Boolean  @default(true)
+
+  // Reminder preferences
+  reminderValue   Int     @default(1)
+  reminderUnit    String  @default("days")
+  reminderEnabled Boolean @default(true)
+
+  // Morning brief opt-out
+  dailyReportEnabled Boolean @default(true)
+
+  createdAt DateTime @default(now())
+
+  assignedTasks       Task[]        @relation("AssignedTasks")
+  createdTasks        Task[]        @relation("CreatedTasks")
+  taskLogs            TaskLog[]
+  auditLogs           AuditLog[]
+  interactions        Interaction[] @relation("InteractionCreator")
+  campaigns           Campaign[]    @relation("CampaignCreator")
+  invoices            Invoice[]
+  leadsAssigned       Lead[]        @relation("LeadAssignee")
+  createdEvents       Event[]       @relation("EventCreator")
+  assignedEvents      Event[]       @relation("EventAssignees")
+  createdAppointments Appointment[] @relation("AppointmentCreator")
+  assignedAppointments Appointment[] @relation("AppointmentAssignee")
+
+  @@unique([workspaceId, email])
+  @@unique([workspaceId, externalId])
+}
+
+// ══════════════════════════ TASKS ══════════════════════════
+enum TaskStatus {
+  pending
+  in_progress
+  done
+  cancelled
+}
+
+enum TaskPriority {
+  low
+  medium
+  high
+  urgent
+}
+
+model Task {
+  id          String       @id @default(uuid())
+  workspaceId String
+  workspace   Workspace    @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  title       String
+  description String?
+  assignedToId String?
+  assignedTo  Employee?    @relation("AssignedTasks", fields: [assignedToId], references: [id])
+  createdById String?
+  createdBy   Employee?    @relation("CreatedTasks", fields: [createdById], references: [id])
+  status      TaskStatus   @default(pending)
+  priority    TaskPriority @default(medium)
+  dueDate     DateTime?
+  completedAt DateTime?
+  completedLate Boolean    @default(false)
+  daysLate    Int          @default(0)
+  isDeleted   Boolean      @default(false)
+  deletedAt   DateTime?
+  isArchived  Boolean      @default(false)
+  archivedAt  DateTime?
+  createdAt   DateTime     @default(now())
+
+  logs TaskLog[]
+
+  @@index([workspaceId, status])
+}
+
+model TaskLog {
+  id     String @id @default(uuid())
+  taskId String
+  task   Task   @relation(fields: [taskId], references: [id], onDelete: Cascade)
+
+  changedById String?
+  changedBy   Employee? @relation(fields: [changedById], references: [id])
+
+  oldStatus TaskStatus?
+  newStatus TaskStatus?
+  note      String?
+  createdAt DateTime    @default(now())
+}
+
+model AuditLog {
+  id          String   @id @default(uuid())
+  workspaceId String
+  workspace   Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  actorId     String?
+  actor       Employee? @relation(fields: [actorId], references: [id])
+  actorType   String
+  action      String
+  entityType  String
+  entityId    String
+  oldValue    Json?
+  newValue    Json?
+  createdAt   DateTime @default(now())
+}
+
+// ══════════════════════════ SCHEDULING ══════════════════════════
+model Appointment {
+  id          String   @id @default(uuid())
+  workspaceId String
+  workspace   Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  title       String? // auto-named from assignee + date when empty
+  description String?
+  location    String? // room / address / meeting link
+  day         String? // derived from startTime when empty
+  startTime   DateTime
+  endTime     DateTime
+  isAllDay    Boolean  @default(false)
+  groupId     String? // repeated-series marker
+
+  assigneeId  String?
+  assignee    Employee? @relation("AppointmentAssignee", fields: [assigneeId], references: [id])
+  createdById String?
+  createdBy   Employee? @relation("AppointmentCreator", fields: [createdById], references: [id])
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([workspaceId, startTime])
+}
+
+model Event {
+  id          String   @id @default(uuid())
+  workspaceId String
+  workspace   Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  title       String
+  description String?
+  type        String   @default("event") // meeting, deadline, milestone, workshop, social, event
+  startDate   DateTime
+  endDate     DateTime
+  isAllDay    Boolean  @default(false)
+  groupId     String?
+  externalCalendarIds Json? // Google/Outlook event IDs per day
+
+  createdById String?
+  createdBy   Employee? @relation("EventCreator", fields: [createdById], references: [id])
+  assignees   Employee[] @relation("EventAssignees")
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([workspaceId, startDate])
+}
+
+// ══════════════════════════ CRM ══════════════════════════
+enum LeadSource {
+  WHATSAPP
+  WEBSITE
+  MANUAL
+  IMPORT
+  PHONE
+  WALK_IN
+  SOCIAL
+}
+
+enum LeadStatus {
+  NEW
+  CONTACTED
+  QUALIFIED
+  CONVERTED
+  LOST
+}
+
+model Lead {
+  id          String     @id @default(uuid())
+  workspaceId String
+  workspace   Workspace  @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  name        String
+  phone       String?
+  email       String?
+  source      LeadSource @default(MANUAL)
+  status      LeadStatus @default(NEW)
+  score       Int        @default(0)
+  notes       String?    @db.Text
+
+  assignedToId String?
+  assignedTo   Employee? @relation("LeadAssignee", fields: [assignedToId], references: [id])
+
+  // WhatsApp compliance & windows
+  lastInboundAt   DateTime?
+  welcomeSentAt   DateTime?
+  optedOutAt      DateTime?
+  lastMarketingAt DateTime?
+  optInSource     String?
+
+  // Optional inbox integration (Chatwoot etc.)
+  inboxContactId      String?
+  inboxConversationId String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  interactions       Interaction[]
+  campaignRecipients CampaignRecipient[]
+
+  @@unique([workspaceId, phone])
+  @@index([workspaceId, lastInboundAt])
+  @@index([workspaceId, inboxConversationId])
+}
+
+enum InteractionType {
+  MESSAGE
+  CALL
+  EMAIL
+  MEETING
+  SYSTEM_NOTE
+}
+
+enum InteractionOrigin {
+  CUSTOMER
+  AUTOMATION
+  AGENT
+  INTERNAL
+}
+
+model Interaction {
+  id     String @id @default(uuid())
+  leadId String
+  lead   Lead   @relation(fields: [leadId], references: [id], onDelete: Cascade)
+
+  type    InteractionType   @default(MESSAGE)
+  origin  InteractionOrigin @default(CUSTOMER)
+  content String            @db.Text
+  waMessageId String?       @unique // idempotency key from Meta
+  mediaType   String?
+  mediaUrl    String?
+
+  createdById String?
+  createdBy   Employee? @relation("InteractionCreator", fields: [createdById], references: [id])
+  createdAt   DateTime  @default(now())
+
+  @@index([leadId, origin, createdAt])
+}
+
+// Deployment-level inbound queue (one WhatsApp number per deployment)
+enum WhatsAppEventStatus {
+  PENDING
+  PROCESSED
+  FAILED
+}
+
+model WhatsAppEvent {
+  id          String              @id @default(uuid())
+  waMessageId String              @unique
+  payload     Json
+  status      WhatsAppEventStatus @default(PENDING)
+  attempts    Int                 @default(0)
+  error       String?             @db.Text
+  receivedAt  DateTime            @default(now())
+  processedAt DateTime?
+
+  @@index([status, receivedAt])
+}
+
+// ══════════════════════════ CAMPAIGNS ══════════════════════════
+enum CampaignStatus {
+  DRAFT
+  RUNNING
+  PAUSED
+  DONE
+}
+
+enum RecipientStatus {
+  PENDING
+  SENT
+  FAILED
+  DEFERRED
+}
+
+model Campaign {
+  id          String   @id @default(uuid())
+  workspaceId String
+  workspace   Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  name        String
+  templateName     String
+  templateLanguage String  @default("en")
+  headerMediaId    String?
+  headerFormat     String?
+  templateVariableNames Json?
+  variables         Json?
+
+  // Targeting criteria (stored for audit)
+  audienceDays     Int     @default(60)
+  audienceStatus   String?
+  addedWithinDays  Int?
+  addedBeforeDays  Int?
+  activeWithinDays Int?
+  activeBeforeDays Int?
+  audienceSource   LeadSource?
+  cooldownDays     Int     @default(14)
+
+  status          CampaignStatus @default(DRAFT)
+  totalRecipients Int            @default(0)
+  sentCount       Int            @default(0)
+  failedCount     Int            @default(0)
+  excludedBreakdown Json?
+
+  createdById   String?
+  createdBy     Employee? @relation("CampaignCreator", fields: [createdById], references: [id])
+  createdByName String?
+
+  startedAt  DateTime?
+  finishedAt DateTime?
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  recipients CampaignRecipient[]
+
+  @@index([workspaceId, status])
+}
+
+model CampaignRecipient {
+  id         String          @id @default(uuid())
+  campaignId String
+  campaign   Campaign        @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+  leadId     String
+  lead       Lead            @relation(fields: [leadId], references: [id], onDelete: Cascade)
+  status     RecipientStatus @default(PENDING)
+  waMessageId String?
+  error      String?         @db.Text
+  attempts   Int             @default(0)
+  sentAt     DateTime?
+
+  @@unique([campaignId, leadId])
+  @@index([campaignId, status])
+}
+
+// ══════════════════════════ BILLING ══════════════════════════
+model Invoice {
+  id            String   @id @default(uuid())
+  workspaceId   String
+  workspace     Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  invoiceNumber Int      @default(autoincrement())
+  customerName  String
+  category      String // consulting, course, workshop, service, product...
+  description   String
+  amount        Float // unit price in workspace currency
+  quantity      Int      @default(1)
+  discount      Int      @default(0)
+  netAmount     Float
+  status        String   @default("PENDING") // PENDING / PAID / CANCELLED
+  issuedByName  String?
+
+  createdById String
+  createdBy   Employee @relation(fields: [createdById], references: [id])
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([workspaceId, createdAt])
+}

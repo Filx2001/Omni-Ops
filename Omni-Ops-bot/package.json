@@ -1,0 +1,41 @@
+{
+  "name": "omni-ops-bot",
+  "version": "2.0.0",
+  "description": "Omni-Ops: Multi-tenant global business management Discord bot",
+  "main": "src/index.js",
+  "engines": {
+    "node": "22.x"
+  },
+  "scripts": {
+    "start": "node src/index.js",
+    "dev": "node src/index.js",
+    "deploy": "node src/deploy-commands.js",
+    "format": "npx prettier --write \"src/**/*.js\"",
+    "format:check": "npx prettier --check \"src/**/*.js\""
+  },
+  "keywords": [
+    "discord-bot",
+    "crm",
+    "saas",
+    "multi-tenant",
+    "management",
+    "automation"
+  ],
+  "author": "Omni-Ops",
+  "license": "ISC",
+  "type": "commonjs",
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.110.0",
+    "@google/generative-ai": "^0.24.1",
+    "assemblyai": "^4.35.0",
+    "axios": "^1.17.0",
+    "discord.js": "^14.26.4",
+    "dotenv": "^17.4.2",
+    "express": "^5.2.1",
+    "node-cache": "^5.1.2",
+    "node-cron": "^4.4.1"
+  },
+  "devDependencies": {
+    "prettier": "^3.2.5"
+  }
+}

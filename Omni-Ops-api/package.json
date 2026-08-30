@@ -1,0 +1,33 @@
+{
+  "name": "OmniChat-Ops-api",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "scripts": {
+    "start": "prisma migrate deploy && node src/app.js",
+    "dev": "nodemon src/app.js",
+    "postinstall": "prisma generate",
+    "format": "npx prettier --write \"src/**/*.js\"",
+    "format:check": "npx prettier --check \"src/**/*.js\""
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.110.0",
+    "@prisma/client": "^6.19.3",
+    "cors": "^2.8.6",
+    "dotenv": "^17.4.2",
+    "express": "^5.2.1",
+    "google-spreadsheet": "^5.3.0",
+    "googleapis": "^173.0.0",
+    "nodemailer": "^9.0.1",
+    "prisma": "^6.19.3",
+    "resend": "^6.14.0",
+    "sharp": "^0.35.3"
+  },
+  "devDependencies": {
+    "nodemon": "^3.1.14"
+  }
+}
