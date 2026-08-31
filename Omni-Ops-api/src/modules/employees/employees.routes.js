@@ -1,134 +1,105 @@
 const express = require("express");
 const router = express.Router();
-const {
-  createEmployee,
-  getEmployees,
-  getEmployeeByDiscordId,
-  getEmployeeById, // ⬅️ جديد: لازم تضيف الدالة دي في employees.service.js (تحت)
-  linkEmployee,
-  deactivateEmployee,
-  updateReminderSettings,
-  updateEmployeeRole,
-  updateEmployee,
-} = require("./employees.service");
+const svc = require("./employees.service");
 
+// POST /employees — create an employee in the current workspace
 router.post("/", async (req, res) => {
   try {
-    const employee = await createEmployee(req.body);
-
+    const employee = await svc.createEmployee(req.workspace.id, req.body);
     res.status(201).json(employee);
   } catch (error) {
-    res.status(500).json({
-      error: error.message,
-    });
+    if (error.code === "P2002") {
+      return res
+        .status(409)
+        .json({ error: "Email or platform ID already exists in this workspace." });
+    }
+    res.status(500).json({ error: error.message });
   }
 });
 
-router.get("/discord/:discordId", async (req, res) => {
+// GET /employees/external/:externalId — identity lookup (workspace header optional)
+router.get("/external/:externalId", async (req, res) => {
   try {
-    const employee = await getEmployeeByDiscordId(req.params.discordId);
-
-    if (!employee) {
-      return res.status(404).json({
-        error: "Employee not found",
-      });
-    }
-
+    const employee = await svc.getEmployeeByExternal(
+      req.params.externalId,
+      req.workspace?.id || null
+    );
+    if (!employee) return res.status(404).json({ error: "Employee not found" });
     res.json(employee);
   } catch (error) {
-    res.status(500).json({
-      error: error.message,
-    });
+    res.status(500).json({ error: error.message });
   }
 });
 
+// GET /employees — list employees of the current workspace
 router.get("/", async (req, res) => {
   try {
-    const employees = await getEmployees();
-
-    res.json(employees);
+    res.json(await svc.getEmployees(req.workspace.id));
   } catch (error) {
-    res.status(500).json({
-      error: error.message,
-    });
+    res.status(500).json({ error: error.message });
   }
 });
 
-// ⬅️ جديد: جلب موظف واحد بالـ id (ده اللي البوت بيحتاجه عشان يجيب الـ discordId ويبعت الـ DM)
-// مهم: لازم يفضل بعد /discord/:discordId عشان ما يخطفش الراوت بتاعه.
+// GET /employees/:id — single employee (must stay AFTER /external)
 router.get("/:id", async (req, res) => {
   try {
-    const employee = await getEmployeeById(req.params.id);
-
-    if (!employee) {
-      return res.status(404).json({
-        error: "Employee not found",
-      });
-    }
-
+    const employee = await svc.getEmployeeById(req.workspace.id, req.params.id);
+    if (!employee) return res.status(404).json({ error: "Employee not found" });
     res.json(employee);
   } catch (error) {
-    res.status(500).json({
-      error: error.message,
-    });
+    res.status(500).json({ error: error.message });
   }
 });
 
+// PATCH /employees/:id/link — link a platform account (Discord/Slack)
 router.patch("/:id/link", async (req, res) => {
   try {
-    const employee = await linkEmployee(req.params.id, req.body.discordId);
-
+    const employee = await svc.linkEmployee(req.workspace.id, req.params.id, req.body.externalId);
     res.json(employee);
   } catch (error) {
-    res.status(500).json({
-      error: error.message,
-    });
+    if (error.code === "P2025") return res.status(404).json({ error: "Employee not found" });
+    if (error.code === "P2002")
+      return res
+        .status(409)
+        .json({ error: "That platform account is already linked to another employee." });
+    res.status(500).json({ error: error.message });
   }
 });
 
+// PATCH /employees/:id/deactivate
 router.patch("/:id/deactivate", async (req, res) => {
   try {
-    const employee = await deactivateEmployee(req.params.id);
-
-    res.json(employee);
+    res.json(await svc.deactivateEmployee(req.workspace.id, req.params.id));
   } catch (error) {
-    res.status(500).json({
-      error: error.message,
-    });
+    res.status(500).json({ error: error.message });
   }
 });
+
+// PATCH /employees/:id/reminder — personal reminder preferences
 router.patch("/:id/reminder", async (req, res) => {
   try {
-    const employee = await updateReminderSettings(req.params.id, req.body);
-
-    res.json(employee);
+    res.json(await svc.updateReminderSettings(req.workspace.id, req.params.id, req.body));
   } catch (error) {
-    res.status(500).json({
-      error: error.message,
-    });
+    res.status(500).json({ error: error.message });
   }
 });
 
+// PATCH /employees/:id/role — promote / change role
 router.patch("/:id/role", async (req, res) => {
   try {
-    const employee = await updateEmployeeRole(req.params.id, req.body.roleId);
-    res.json(employee);
+    res.json(await svc.updateEmployeeRole(req.workspace.id, req.params.id, req.body.roleId));
   } catch (error) {
-    res.status(500).json({
-      error: error.message,
-    });
+    res.status(500).json({ error: error.message });
   }
 });
 
+// PATCH /employees/:id — general update (name, email, phone, role, dailyReport)
 router.patch("/:id", async (req, res) => {
   try {
-    const employee = await updateEmployee(req.params.id, req.body);
-
-    res.json(employee);
+    res.json(await svc.updateEmployee(req.workspace.id, req.params.id, req.body));
   } catch (error) {
-    res.status(500).json({
-      error: error.message,
-    });
+    res.status(500).json({ error: error.message });
   }
 });
+
 module.exports = router;

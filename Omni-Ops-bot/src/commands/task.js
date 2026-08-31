@@ -159,7 +159,7 @@ module.exports = {
       await interaction.deferReply({ ephemeral: true });
       try {
         const employeeResponse = await axios.get(
-          `${process.env.API_URL}/employees/external/${interaction.user.id}`
+          `/employees/external/${interaction.user.id}`
         );
         const creator = employeeResponse.data;
         if (!["Admin", "Manager"].includes(creator.role?.name)) {
@@ -175,7 +175,7 @@ module.exports = {
           return interaction.editReply("❌ Please select an employee from the dropdown list.");
         }
 
-        const employeesResponse = await axios.get(`${process.env.API_URL}/employees`);
+        const employeesResponse = await axios.get(`/employees`);
         const assignedEmployee = employeesResponse.data.find((e) => e.id === employeeId);
         const priority = interaction.options.getString("priority");
         const attachment = interaction.options.getAttachment("file");
@@ -196,7 +196,7 @@ module.exports = {
           return interaction.editReply("❌ You cannot schedule tasks in past years.");
         }
 
-        const response = await axios.post(`${process.env.API_URL}/tasks`, {
+        const response = await axios.post(`/tasks`, {
           title,
           description,
           assignedToId: employeeId,
@@ -264,14 +264,14 @@ module.exports = {
 
         // Update protection: Employees can only update their own tasks, Managers can update any
         const employeeResponse = await axios.get(
-          `${process.env.API_URL}/employees/external/${interaction.user.id}`
+          `/employees/external/${interaction.user.id}`
         );
         const currentEmployee = employeeResponse.data;
         const isManager = ["Admin", "Manager"].includes(currentEmployee.role?.name);
 
         if (!isManager) {
           const myTasksResponse = await axios.get(
-            `${process.env.API_URL}/tasks/employee/${currentEmployee.id}`
+            `/tasks/employee/${currentEmployee.id}`
           );
           const ownsTask = myTasksResponse.data.some((t) => t.id === taskId);
           if (!ownsTask) {
@@ -283,7 +283,7 @@ module.exports = {
         const note = interaction.options.getString("note");
         const proof = interaction.options.getAttachment("proof");
 
-        const response = await axios.patch(`${process.env.API_URL}/tasks/${taskId}/status`, {
+        const response = await axios.patch(`/tasks/${taskId}/status`, {
           status,
         });
         const task = response.data;
@@ -291,7 +291,7 @@ module.exports = {
 
         if (status === "done") {
           try {
-            const employeesResponse = await axios.get(`${process.env.API_URL}/employees`);
+            const employeesResponse = await axios.get(`/employees`);
             const managers = employeesResponse.data.filter(
               (employee) =>
                 ["Admin", "Manager"].includes(employee.role?.name) && employee.externalId
@@ -351,11 +351,11 @@ module.exports = {
       await interaction.deferReply();
       try {
         const employeeResponse = await axios.get(
-          `${process.env.API_URL}/employees/external/${interaction.user.id}`
+          `/employees/external/${interaction.user.id}`
         );
         const employee = employeeResponse.data;
         const tasksResponse = await axios.get(
-          `${process.env.API_URL}/tasks/employee/${employee.id}`
+          `/tasks/employee/${employee.id}`
         );
         const tasks = tasksResponse.data;
 
@@ -388,14 +388,14 @@ module.exports = {
       await interaction.deferReply();
       try {
         const employeeResponse = await axios.get(
-          `${process.env.API_URL}/employees/external/${interaction.user.id}`
+          `/employees/external/${interaction.user.id}`
         );
         const currentEmployee = employeeResponse.data;
         if (!["Admin", "Manager"].includes(currentEmployee.role?.name)) {
           return interaction.editReply("❌ Management only.");
         }
 
-        const employeesResponse = await axios.get(`${process.env.API_URL}/employees`);
+        const employeesResponse = await axios.get(`/employees`);
         const employees = employeesResponse.data;
         const employeeId = interaction.options.getString("employee");
         const beforeDate = interaction.options.getString("before");
@@ -407,7 +407,7 @@ module.exports = {
         const overdueTasks = [];
         for (const employee of filteredEmployees) {
           const tasksResponse = await axios.get(
-            `${process.env.API_URL}/tasks/employee/${employee.id}`
+            `/tasks/employee/${employee.id}`
           );
           const tasks = tasksResponse.data;
           tasks
@@ -458,7 +458,7 @@ module.exports = {
       await interaction.deferReply({ ephemeral: true });
       try {
         const employeeResponse = await axios.get(
-          `${process.env.API_URL}/employees/external/${interaction.user.id}`
+          `/employees/external/${interaction.user.id}`
         );
         const employee = employeeResponse.data;
         if (!["Admin", "Manager"].includes(employee.role?.name)) {
@@ -466,7 +466,7 @@ module.exports = {
         }
 
         const taskId = interaction.options.getString("task");
-        const response = await axios.delete(`${process.env.API_URL}/tasks/${taskId}`);
+        const response = await axios.delete(`/tasks/${taskId}`);
         const task = response.data;
         clearCache("all_tasks");
 
@@ -501,7 +501,7 @@ module.exports = {
       try {
         // Edit protection: Managers only
         const employeeResponse = await axios.get(
-          `${process.env.API_URL}/employees/external/${interaction.user.id}`
+          `/employees/external/${interaction.user.id}`
         );
         const currentEmployee = employeeResponse.data;
         if (!["Admin", "Manager"].includes(currentEmployee.role?.name)) {
@@ -532,7 +532,7 @@ module.exports = {
           updateData.dueDate = parsedDate;
         }
 
-        const response = await axios.patch(`${process.env.API_URL}/tasks/${taskId}`, updateData);
+        const response = await axios.patch(`/tasks/${taskId}`, updateData);
         clearCache("all_tasks");
 
         const embed = new EmbedBuilder()
@@ -584,14 +584,14 @@ module.exports = {
       try {
         // Must be a manager, or the task must be assigned to the requester
         const employeeResponse = await axios.get(
-          `${process.env.API_URL}/employees/external/${interaction.user.id}`
+          `/employees/external/${interaction.user.id}`
         );
         const currentEmployee = employeeResponse.data;
         const isManager = ["Admin", "Manager"].includes(currentEmployee.role?.name);
 
         if (!isManager) {
           const myTasksResponse = await axios.get(
-            `${process.env.API_URL}/tasks/employee/${currentEmployee.id}`
+            `/tasks/employee/${currentEmployee.id}`
           );
           const ownsTask = myTasksResponse.data.some((t) => t.id === taskId);
           if (!ownsTask) {
@@ -599,7 +599,7 @@ module.exports = {
           }
         }
 
-        const response = await axios.get(`${process.env.API_URL}/tasks/${taskId}/history`);
+        const response = await axios.get(`/tasks/${taskId}/history`);
         const history = response.data;
 
         if (!history.length) {

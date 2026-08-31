@@ -1,9 +1,7 @@
-// كشف طلبات إيقاف الرسايل الترويجية
-// الشرط: الرسالة كلها تكون كلمة إيقاف — مش مجرد وجودها جوه جملة،
-// عشان "متبطلوش ترسلوا" ما تتحسبش طلب إيقاف
+// Detects requests to stop promotional messages.
+// Condition: the entire message must be the stop word — not just present inside a sentence.
 
 const STOP_WORDS = new Set([
-  // عربي
   "إلغاء",
   "الغاء",
   "إيقاف",
@@ -17,7 +15,6 @@ const STOP_WORDS = new Set([
   "لا اريد",
   "لا أريد",
   "كفاية",
-  // إنجليزي
   "stop",
   "unsubscribe",
   "cancel",
@@ -28,12 +25,11 @@ const STOP_WORDS = new Set([
 
 const START_WORDS = new Set(["اشتراك", "ابدأ", "ابدا", "start", "subscribe", "resume"]);
 
-/** بيوحّد النص: مسافات، تشكيل، همزات، علامات ترقيم */
 function normalizeText(text) {
   return String(text || "")
     .trim()
     .toLowerCase()
-    .replace(/[\u064B-\u0652]/g, "") // التشكيل
+    .replace(/[\u064B-\u0652]/g, "") // Arabic diacritics
     .replace(/[.،,!?؟*_-]/g, "")
     .replace(/\s+/g, " ")
     .trim();

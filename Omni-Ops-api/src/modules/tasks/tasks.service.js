@@ -1,29 +1,33 @@
 const prisma = require("../../prisma");
-const { logAction, getTaskHistory } = require("../../services/audit/audit.service");
-const { addEventToGoogle, deleteEventFromGoogle } = require("../../utils/googleCalendar");
+const { logAction } = require("../../services/audit/audit.service");
+const { addEventToGoogle, deleteEventFromGoogle } = require("../../integrations/googleCalendar");
 const {
   syncPersonalTask,
   removePersonalTask,
   isPersonalTask,
-} = require("../../utils/personalTasksSheet");
-// التاسك الشخصية بتروح لكالندر منفصل — undefined معناها الكالندر العام
+} = require("../../integrations/personalTasksSheet");
+
+// Personal tasks (manager assigned to themselves) go to a private calendar
 const calFor = (task) =>
   isPersonalTask(task) ? process.env.PERSONAL_TASKS_CALENDAR_ID || undefined : undefined;
-async function createTask(data) {
+
+const INCLUDE = { assignedTo: true, createdBy: true };
+
+async function createTask(workspace, data) {
   const task = await prisma.task.create({
-    data,
-    include: { assignedTo: true, createdBy: true },
+    data: { ...data, workspaceId: workspace.id },
+    include: INCLUDE,
   });
+
   const personal = isPersonalTask(task);
   const validEmails = [];
-  // مش بننسخ لكالندر الموظف في التاسك الشخصية — هتظهر مرتين عندها
+  // Don't copy personal tasks into the employee's calendar — they'd see it twice
   if (!personal && task.assignedTo?.email && task.assignedTo.email.includes("@")) {
     validEmails.push(task.assignedTo.email);
   }
   if (task.dueDate) {
     try {
       await addEventToGoogle({
-        // 🌟 التعديل هنا: طباعة اسم الموظف في العنوان
         title: `${task.assignedTo?.name || "Unassigned"} - 📋 Task: ${task.title}`,
         description: `👤 Assigned To: ${task.assignedTo?.name || "Unknown"}\n🔥 Priority: ${task.priority}\n📄 ${task.description || "No description"}`,
         startDate: task.dueDate,
@@ -32,21 +36,28 @@ async function createTask(data) {
         targetEmails: validEmails,
         calendarId: calFor(task),
       });
-    } catch (error) {}
+    } catch (error) {
+      console.error("[Google] Task event sync failed:", error.message);
+    }
   }
+
   await logAction({
+    workspaceId: workspace.id,
     action: "TASK_CREATED",
     entityType: "task",
     entityId: task.id,
     newValue: task,
   });
-  // التاسكات الشخصية بس هي اللي بتروح للشيت الخاص
+
   syncPersonalTask(task).catch(() => {});
   return task;
 }
 
-async function updateTaskStatus(id, status) {
-  const oldTask = await prisma.task.findUnique({ where: { id }, include: { assignedTo: true } });
+async function updateTaskStatus(workspace, id, status) {
+  const oldTask = await prisma.task.findFirst({
+    where: { id, workspaceId: workspace.id },
+    include: { assignedTo: true },
+  });
   if (!oldTask) throw new Error("Task not found.");
 
   let endOfDueDate = null;
@@ -54,7 +65,6 @@ async function updateTaskStatus(id, status) {
     endOfDueDate = new Date(oldTask.dueDate);
     endOfDueDate.setHours(23, 59, 59, 999);
   }
-
   if (
     status !== "done" &&
     endOfDueDate &&
@@ -78,7 +88,6 @@ async function updateTaskStatus(id, status) {
   if (oldTask.dueDate && (status === "done" || status === "cancelled")) {
     try {
       await deleteEventFromGoogle({
-        // 🌟 التعديل في الحذف عشان يلاقيه بالاسم الجديد
         title: `${oldTask.assignedTo?.name || "Unassigned"} - 📋 Task: ${oldTask.title}`,
         startDate: oldTask.dueDate,
         targetEmails: oldTask.assignedTo?.email ? [oldTask.assignedTo.email] : [],
@@ -88,24 +97,28 @@ async function updateTaskStatus(id, status) {
   }
 
   await logAction({
+    workspaceId: workspace.id,
     action: "TASK_STATUS_UPDATED",
     entityType: "task",
     entityId: task.id,
     oldValue: oldTask,
     newValue: task,
   });
+
   syncPersonalTask({ ...oldTask, ...task }).catch(() => {});
   return task;
 }
 
-async function deleteTask(id) {
-  const task = await prisma.task.findUnique({ where: { id }, include: { assignedTo: true } });
+async function deleteTask(workspace, id) {
+  const task = await prisma.task.findFirst({
+    where: { id, workspaceId: workspace.id },
+    include: { assignedTo: true },
+  });
   if (!task) throw new Error("Task not found.");
 
   if (task.dueDate && !["done", "cancelled"].includes(task.status)) {
     try {
       await deleteEventFromGoogle({
-        // 🌟 التعديل في الحذف
         title: `${task.assignedTo?.name || "Unassigned"} - 📋 Task: ${task.title}`,
         startDate: task.dueDate,
         targetEmails: task.assignedTo?.email ? [task.assignedTo.email] : [],
@@ -115,22 +128,28 @@ async function deleteTask(id) {
   }
 
   await logAction({
+    workspaceId: workspace.id,
     action: "TASK_DELETED",
     entityType: "task",
     entityId: task.id,
     oldValue: task,
   });
+
   const deleted = await prisma.task.update({
     where: { id },
     data: { isDeleted: true, deletedAt: new Date() },
-    include: { assignedTo: true, createdBy: true },
+    include: INCLUDE,
   });
+
   removePersonalTask(id).catch(() => {});
   return deleted;
 }
 
-async function updateTask(id, data) {
-  const oldTask = await prisma.task.findUnique({ where: { id }, include: { assignedTo: true } });
+async function updateTask(workspace, id, data) {
+  const oldTask = await prisma.task.findFirst({
+    where: { id, workspaceId: workspace.id },
+    include: { assignedTo: true },
+  });
   if (!oldTask) throw new Error("Task not found.");
 
   if (oldTask.dueDate && !["done", "cancelled"].includes(oldTask.status)) {
@@ -147,7 +166,7 @@ async function updateTask(id, data) {
   const task = await prisma.task.update({
     where: { id },
     data,
-    include: { assignedTo: true, createdBy: true },
+    include: INCLUDE,
   });
 
   const personal = isPersonalTask(task);
@@ -155,7 +174,6 @@ async function updateTask(id, data) {
   if (!personal && task.assignedTo?.email && task.assignedTo.email.includes("@")) {
     validEmails.push(task.assignedTo.email);
   }
-
   if (task.dueDate && !["done", "cancelled"].includes(task.status)) {
     try {
       await addEventToGoogle({
@@ -171,32 +189,41 @@ async function updateTask(id, data) {
   }
 
   await logAction({
+    workspaceId: workspace.id,
     action: "TASK_UPDATED",
     entityType: "task",
     entityId: task.id,
     oldValue: oldTask,
     newValue: task,
   });
-  // لو المكلَّف اتغير لحد تاني، الدالة بتشيل الصف من الشيت لوحدها
+
   syncPersonalTask(task).catch(() => {});
   return task;
 }
 
-async function getTasksByEmployee(employeeId) {
+async function getTasksByEmployee(workspace, employeeId) {
   return prisma.task.findMany({
-    where: { assignedToId: employeeId, isDeleted: false, isArchived: false },
-    include: { assignedTo: true, createdBy: true },
+    where: {
+      workspaceId: workspace.id,
+      assignedToId: employeeId,
+      isDeleted: false,
+      isArchived: false,
+    },
+    include: INCLUDE,
     orderBy: { createdAt: "desc" },
   });
 }
-async function getTasks() {
+
+async function getTasks(workspace) {
   return prisma.task.findMany({
-    where: { isDeleted: false, isArchived: false },
-    include: { assignedTo: true, createdBy: true },
+    where: { workspaceId: workspace.id, isDeleted: false, isArchived: false },
+    include: INCLUDE,
     orderBy: { createdAt: "desc" },
   });
 }
+
 async function getTaskAuditHistory(taskId) {
+  const { getTaskHistory } = require("../../services/audit/audit.service");
   return getTaskHistory(taskId);
 }
 

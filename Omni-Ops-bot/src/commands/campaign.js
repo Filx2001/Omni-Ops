@@ -239,7 +239,7 @@ module.exports = {
     try {
       // Campaigns are management-only — they cost money and affect the sender rating
       const employeeResponse = await axios.get(
-        `${process.env.API_URL}/employees/external/${interaction.user.id}`
+        ` /employees/external/${interaction.user.id}`
       );
       const employee = employeeResponse.data;
       if (!["Admin", "Manager"].includes(employee.role?.name)) {
@@ -248,7 +248,7 @@ module.exports = {
 
       // ========================== Audience ==========================
       if (subcommand === "audience") {
-        const { data } = await axios.get(`${process.env.API_URL}/campaigns/audience`);
+        const { data } = await axios.get(`/campaigns/audience`);
         const statusLines = Object.entries(data.byStatus)
           .map(([key, count]) => `${LEAD_STATUS_LABELS[key] || key}: **${count}**`)
           .join("\n");
@@ -337,12 +337,12 @@ module.exports = {
           createdById: employee.id,
           createdByName: employee.name,
         };
-        const { data } = await axios.post(`${process.env.API_URL}/campaigns`, payload);
+        const { data } = await axios.post(`/campaigns`, payload);
         const { campaign, eligible, funnel, deferredToNextBatch, audienceLabel } = data;
 
         // Full list with names — this is what gets reviewed before confirming
         const { data: list } = await axios.get(
-          `${process.env.API_URL}/campaigns/${campaign.id}/recipients`
+          `/campaigns/${campaign.id}/recipients`
         );
         const recipients = list.recipients || [];
         const shown = recipients.slice(0, NAMES_IN_EMBED);
@@ -452,7 +452,7 @@ module.exports = {
           }
           await press.deferUpdate();
           const { data: started } = await axios.post(
-            `${process.env.API_URL}/campaigns/${campaign.id}/start`
+            `/campaigns/${campaign.id}/start`
           );
           const sending = new EmbedBuilder()
             .setColor(EMBED_COLORS.SUCCESS || 0x00ff00)
@@ -486,7 +486,7 @@ module.exports = {
       // ========================== Send ==========================
       else if (subcommand === "send") {
         const campaignId = interaction.options.getString("campaign");
-        const { data } = await axios.post(`${process.env.API_URL}/campaigns/${campaignId}/start`);
+        const { data } = await axios.post(`/campaigns/${campaignId}/start`);
         const embed = new EmbedBuilder()
           .setColor(EMBED_COLORS.SUCCESS || 0x00ff00)
           .setTitle("📤 Campaign Started")
@@ -503,7 +503,7 @@ module.exports = {
       else if (subcommand === "recipients") {
         const campaignId = interaction.options.getString("campaign");
         const { data } = await axios.get(
-          `${process.env.API_URL}/campaigns/${campaignId}/recipients`
+          `/campaigns/${campaignId}/recipients`
         );
         if (!data.recipients.length) {
           return interaction.editReply("📭 This campaign has no recipients.");
@@ -536,7 +536,7 @@ module.exports = {
       // ========================== Status ==========================
       else if (subcommand === "status") {
         const campaignId = interaction.options.getString("campaign");
-        const { data } = await axios.get(`${process.env.API_URL}/campaigns/${campaignId}/progress`);
+        const { data } = await axios.get(`/campaigns/${campaignId}/progress`);
         const percent = data.total ? Math.round((data.sent / data.total) * 100) : 0;
         const filled = Math.round(percent / 10);
         const bar = "█".repeat(filled) + "░".repeat(10 - filled);
@@ -563,7 +563,7 @@ module.exports = {
       // ========================== Stop ==========================
       else if (subcommand === "stop") {
         const campaignId = interaction.options.getString("campaign");
-        const { data } = await axios.post(`${process.env.API_URL}/campaigns/${campaignId}/stop`);
+        const { data } = await axios.post(`/campaigns/${campaignId}/stop`);
         const embed = new EmbedBuilder()
           .setColor(EMBED_COLORS.DELETE || 0xff0000)
           .setTitle("⏸️ Campaign Paused")
@@ -578,7 +578,7 @@ module.exports = {
       }
       // ========================== List ==========================
       else if (subcommand === "list") {
-        const { data } = await axios.get(`${process.env.API_URL}/campaigns?limit=10`);
+        const { data } = await axios.get(`/campaigns?limit=10`);
         if (!data.length) {
           return interaction.editReply("📭 No campaigns yet. Start with `/campaign audience`.");
         }
@@ -602,7 +602,7 @@ module.exports = {
       // ========================== Info ==========================
       else if (subcommand === "info") {
         const campaignId = interaction.options.getString("campaign");
-        const { data } = await axios.get(`${process.env.API_URL}/campaigns/${campaignId}`);
+        const { data } = await axios.get(`/campaigns/${campaignId}`);
         const replyRate = data.sent ? ((data.replies / data.sent) * 100).toFixed(1) : "0.0";
         const embed = new EmbedBuilder()
           .setColor(EMBED_COLORS.INFO || 0x0099ff)
@@ -683,7 +683,7 @@ module.exports = {
       }
       // Approved Meta templates
       if (focused.name === "template") {
-        const { data } = await axios.get(`${process.env.API_URL}/campaigns/templates`);
+        const { data } = await axios.get(`/campaigns/templates`);
         const query = focused.value.toLowerCase();
         const choices = data
           .filter((t) => t.name.toLowerCase().includes(query))
@@ -703,8 +703,8 @@ module.exports = {
         const statusFilter =
           subcommand === "send" ? "DRAFT,PAUSED" : subcommand === "stop" ? "RUNNING" : null;
         const url = statusFilter
-          ? `${process.env.API_URL}/campaigns/search?status=${statusFilter}`
-          : `${process.env.API_URL}/campaigns/search`;
+          ? `/campaigns/search?status=${statusFilter}`
+          : `/campaigns/search`;
         const { data } = await axios.get(url);
         const query = focused.value.toLowerCase();
         const choices = data

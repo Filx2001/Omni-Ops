@@ -1,15 +1,14 @@
-// صيانة دورية لأحداث الواتساب: إعادة معالجة الفاشل، وتنضيف القديم
-
+// Periodic maintenance for WhatsApp events: retry failed ones, clean up old ones.
 const prisma = require("../prisma");
 const { processStoredEvent } = require("../modules/crm/crm.service");
 
 const RETENTION_DAYS = Number(process.env.WHATSAPP_EVENT_RETENTION_DAYS || 60);
 const MAX_ATTEMPTS = 5;
-const INTERVAL_MS = 60 * 60 * 1000; // كل ساعة
+const INTERVAL_MS = 60 * 60 * 1000; // Every hour
 
-/** بيعيد معالجة الأحداث اللي فشلت أو علقت (مثلاً السيرفر وقع في نص المعالجة) */
+// Retries events that failed or got stuck (e.g., server crashed mid-processing)
 async function retryFailedEvents() {
-  // بنستنى 5 دقايق عشان منزاحمش المعالجة اللحظية
+  // Wait 5 minutes so we don't interfere with real-time processing
   const cutoff = new Date(Date.now() - 5 * 60 * 1000);
 
   const stuck = await prisma.whatsAppEvent.findMany({
@@ -26,12 +25,23 @@ async function retryFailedEvents() {
   console.log(`[Maintenance] Retrying ${stuck.length} stuck event(s)`);
 
   for (const event of stuck) {
-    // processStoredEvent بيرمي عند الفشل وبيزوّد العداد لوحده
-    await processStoredEvent(event).catch(() => {});
+    try {
+      // processStoredEvent throws on failure and increments the attempt counter itself
+      await processStoredEvent(event);
+    } catch (err) {
+      // Safeguard: if this is a legacy event from before multi-tenancy,
+      // it won't have a workspaceId. Mark it as failed so it stops retrying.
+      if (err.message && err.message.includes("No workspace resolved")) {
+        await prisma.whatsAppEvent.update({
+          where: { id: event.id },
+          data: { status: "FAILED", error: "Legacy event: missing workspaceId" },
+        });
+      }
+    }
   }
 }
 
-/** بيمسح الأحداث المعالجة القديمة عشان الجدول ميكبرش بلا نهاية */
+// Deletes old processed events so the table doesn't grow infinitely
 async function cleanupOldEvents() {
   const cutoff = new Date(Date.now() - RETENTION_DAYS * 24 * 60 * 60 * 1000);
 
@@ -52,10 +62,10 @@ async function runMaintenance() {
 }
 
 function startMaintenance() {
-  // أول تشغيل بعد دقيقتين عشان السيرفر يستقر
+  // First run after 2 minutes to let the server stabilize
   setTimeout(runMaintenance, 2 * 60 * 1000);
   const timer = setInterval(runMaintenance, INTERVAL_MS);
-  timer.unref?.(); // ميمنعش البروسيس من الخروج
+  timer.unref?.(); // Doesn't prevent the process from exiting
   console.log("[Maintenance] Scheduler started");
 }
 

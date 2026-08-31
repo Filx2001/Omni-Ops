@@ -1,37 +1,40 @@
-// تطبيع أرقام التليفون لصيغة E.164 موحدة (+97455512345)
-// نقطة واحدة بس عشان نمنع تسجيل نفس العميل مرتين بصيغتين مختلفتين
+// Normalizes phone numbers to a unified E.164 format (+XXXXXXXXXXX).
+// Single source of truth to prevent registering the same customer twice in different formats.
+//
+// Configuration via .env (optional):
+//   DEFAULT_COUNTRY_CODE=974      (e.g. Qatar=974, US=1, UK=44)
+//   LOCAL_NUMBER_LENGTH=8         (length of local mobile numbers to auto-prepend country code)
+//
+// WhatsApp sends numbers with the international code but without the '+'.
+// The local default only applies to manually entered local numbers.
 
-const DEFAULT_COUNTRY_CODE = "974"; // قطر
+const DEFAULT_COUNTRY_CODE = (process.env.DEFAULT_COUNTRY_CODE || "").replace(/\D/g, "");
+const LOCAL_NUMBER_LENGTH = parseInt(process.env.LOCAL_NUMBER_LENGTH || "0", 10) || null;
 
-// أرقام الموبايل القطرية: 8 أرقام بتبدأ بـ 3 أو 5 أو 6 أو 7
-const QATAR_MOBILE = /^[3567]\d{7}$/;
+// Build a regex for local mobile numbers if configured (e.g. /^\d{8}$/)
+const LOCAL_REGEX = LOCAL_NUMBER_LENGTH ? new RegExp(`^\\d{${LOCAL_NUMBER_LENGTH}}$`) : null;
 
-/**
- * بيرجع الرقم بصيغة +<كود الدولة><الرقم>، أو null لو مش صالح.
- * واتساب بيبعت الرقم بالكود الدولي من غير +، فدي بتزوده.
- * الافتراض القطري بيشتغل بس مع الأرقام المحلية اللي بتتسجل يدوي.
- */
 function normalizePhone(input) {
   if (input === null || input === undefined) return null;
 
   let digits = String(input).replace(/\D/g, "");
   if (!digits) return null;
 
-  // صيغة الاتصال الدولي 00974... → 974...
+  // International dialing prefix 00974... -> 974...
   if (digits.startsWith("00")) digits = digits.slice(2);
 
-  // رقم قطري محلي من غير كود دولة
-  if (QATAR_MOBILE.test(digits)) {
+  // Local number without country code
+  if (LOCAL_REGEX && DEFAULT_COUNTRY_CODE && LOCAL_REGEX.test(digits)) {
     digits = DEFAULT_COUNTRY_CODE + digits;
   }
 
-  // حدود E.164
+  // E.164 limits
   if (digits.length < 8 || digits.length > 15) return null;
 
   return "+" + digits;
 }
 
-/** مقارنة رقمين بغض النظر عن الصيغة (مفيدة للشيت والبحث) */
+// Compare two numbers regardless of format (useful for sheets and search)
 function samePhone(a, b) {
   const na = normalizePhone(a);
   const nb = normalizePhone(b);

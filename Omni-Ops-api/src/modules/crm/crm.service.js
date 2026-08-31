@@ -3,45 +3,31 @@ const {
   syncLeadToGoogleSheet,
   deleteLeadFromSheet,
   rebuildLeadsSheet,
-} = require("../../utils/googleSheets");
+} = require("../../integrations/googleSheets");
 const { normalizePhone } = require("../../utils/phone");
-const { sendText, uploadMedia, sendMedia, SIZE_LIMITS } = require("../../utils/whatsapp");
-const { downloadMedia, downloadUrl } = require("../../utils/whatsappMedia");
+const { sendText, uploadMedia, sendMedia, SIZE_LIMITS } = require("../../integrations/whatsapp");
+const { downloadMedia, downloadUrl } = require("../../integrations/whatsappMedia");
 const { compressIfNeeded } = require("../../utils/imageCompress");
 const { isOptOut, isOptIn } = require("../../utils/optOut");
-const chatwoot = require("../../utils/chatwoot");
+const chatwoot = require("../../integrations/chatwoot");
 
-// النص قابل للتغيير من متغير بيئة من غير deploy
-// \u200F (RLM) بيمنع الخلط في اتجاه النص لما العربي والإنجليزي يتلاقوا
+// Configurable via env without redeploying
 const WELCOME_TEXT =
   process.env.WHATSAPP_WELCOME_TEXT ||
-  [
-    "\u200Fأهلاً بك في *Logiscool Qatar* 👋",
-    "\u200Fشكرًا لتواصلكم مع لوجيسكول! سيتواصل معكم أحد ممثلينا في أقرب وقت ممكن.",
-    "",
-    "Welcome to *Logiscool Qatar* 👋",
-    "Thank you for contacting Logiscool! Our representative shall attend to you shortly.",
-  ].join("\n");
+  "Welcome! 👋\nThank you for contacting us. A member of our team will get back to you shortly.";
 
-// رسالة بتتبعت للعميل لو الملف فشل — إنجليزي وعربي لأنها للعميل
-const FILE_FAILED_TEXT =
-  "\u200Fعذراً، تعذّر إرسال الملف. سنحاول إرساله بطريقة أخرى.\n\n" +
-  "Sorry, we couldn't send that file. We'll try another way.";
+const FILE_FAILED_TEXT = "Sorry, we couldn't send that file. We'll try another way.";
 
 // ==========================================
-// Core CRM Logic: Handle Incoming Messages
+// Core CRM: handle incoming messages
 // ==========================================
-/**
- * بيسجّل الحدث الخام الأول (ده مفتاح منع التكرار)، وبعدين يعالجه.
- * بيرجع { lead, interaction, mediaId } أو null لو مكررة.
- */
-async function handleIncomingMessage(msg) {
+
+async function handleIncomingMessage(msg, workspaceId) {
   let event;
   try {
-    // بنخزّن msg كامل — جواه الحقول المفكوكة والرسالة الخام مع بعض،
-    // وده اللي بيخلي إعادة المعالجة ممكنة لو فشلت أول مرة
+    // Store the full msg + resolved workspace so retries route correctly
     event = await prisma.whatsAppEvent.create({
-      data: { waMessageId: msg.waMessageId, payload: msg },
+      data: { waMessageId: msg.waMessageId, payload: { ...msg, workspaceId } },
     });
   } catch (error) {
     if (error.code === "P2002") {
@@ -50,30 +36,26 @@ async function handleIncomingMessage(msg) {
     }
     throw error;
   }
-
-  return processStoredEvent(event, msg);
+  return processStoredEvent(event, { ...msg, workspaceId });
 }
 
-/**
- * منطق المعالجة الفعلي — منفصل عشان مسح الاسترجاع يقدر يندهه
- * على أحداث محفوظة فشلت قبل كده.
- */
 async function processStoredEvent(event, msg = null) {
   const data = msg || event.payload;
-  const { waMessageId, from, name, content, mediaType, mediaId } = data;
-  const sentAt = new Date(data.sentAt); // بيرجع نص من الـ JSON
+  const { waMessageId, from, name, content, mediaType, mediaId, workspaceId } = data;
+  const sentAt = new Date(data.sentAt);
+  if (!workspaceId) throw new Error("No workspace resolved for this message");
 
   try {
     const phone = normalizePhone(from);
     if (!phone) throw new Error(`Could not normalize phone number: ${from}`);
 
-    // الاشتراك/الإلغاء بيتحدد من نص الرسالة
     const optOut = isOptOut(content);
     const optIn = isOptIn(content);
 
     const lead = await prisma.lead.upsert({
-      where: { phone },
+      where: { workspaceId_phone: { workspaceId, phone } },
       create: {
+        workspaceId,
         name: name || "Unknown Lead",
         phone,
         source: "WHATSAPP",
@@ -81,7 +63,7 @@ async function processStoredEvent(event, msg = null) {
         lastInboundAt: sentAt,
         optedOutAt: optOut ? new Date() : null,
       },
-      // الاسم مش بيتحدث عمداً — ممكن الفريق يكون عدله يدوي
+      // Name is intentionally NOT updated — the team may have edited it manually
       update: {
         lastInboundAt: sentAt,
         ...(optOut ? { optedOutAt: new Date() } : {}),
@@ -111,7 +93,6 @@ async function processStoredEvent(event, msg = null) {
       console.log(`[WhatsApp] ${phone} opted out`);
       confirmOptOut(lead).catch(() => {});
     }
-
     console.log(`[WhatsApp] Message stored for ${phone} (lead ${lead.id})`);
     return { lead, interaction, mediaId: mediaId || null };
   } catch (error) {
@@ -125,25 +106,16 @@ async function processStoredEvent(event, msg = null) {
         },
       })
       .catch(() => {});
-
     console.error(`[WhatsApp] Failed to process ${waMessageId}:`, error.message);
     throw error;
   }
 }
 
-/**
- * تأكيد الإيقاف. مهم للتقييم عند ميتا — لو العميل حس إن طلبه اتجاهل
- * هيضغط "حظر وإبلاغ"، وده بيضر الرقم كله.
- * مجاني لأن نافذة الـ 24 ساعة مفتوحة (هو لسه باعت).
- */
+// Confirms opt-out. Important for Meta rating — ignoring a stop request
+// pushes users toward "block & report", which harms the whole number.
 async function confirmOptOut(lead) {
-  const text =
-    "\u200Fتم إيقاف الرسائل الترويجية. لن تصلك رسائل تسويقية بعد الآن.\n" +
-    "\u200Fيمكنك مراسلتنا في أي وقت وسنرد عليك.\n\n" +
-    "You've been unsubscribed from promotional messages. You can message us anytime.";
-
+  const text = "You've been unsubscribed from promotional messages. You can message us anytime.";
   const waMessageId = await sendText(lead.phone, text);
-
   await prisma.interaction.create({
     data: {
       leadId: lead.id,
@@ -153,28 +125,23 @@ async function confirmOptOut(lead) {
       waMessageId,
     },
   });
-
   pushToInbox(lead.id, `🤖 [Auto-reply sent]\n${text}`, "outgoing").catch(() => {});
 }
 
-/**
- * بيبعت رسالة الترحيب مرة واحدة بس لكل عميل.
- * بيتنده بعد ما نرد على ميتا، عشان ميأخرش الرد.
- */
+// Sends the welcome message exactly once per lead.
+// Called after replying to Meta so it never delays the webhook response.
 async function sendWelcomeIfNeeded(leadId) {
-  // بنحجز الترحيب بتحديث مشروط — لو رسالتين جم مع بعض، واحدة بس هتعدي
   const claimed = await prisma.lead.updateMany({
     where: { id: leadId, welcomeSentAt: null },
     data: { welcomeSentAt: new Date() },
   });
-  if (claimed.count === 0) return false; // اتبعت قبل كده
+  if (claimed.count === 0) return false; // already sent
 
   const lead = await prisma.lead.findUnique({ where: { id: leadId } });
   if (!lead?.phone) return false;
 
   try {
     const waMessageId = await sendText(lead.phone, WELCOME_TEXT);
-
     await prisma.interaction.create({
       data: {
         leadId: lead.id,
@@ -184,13 +151,11 @@ async function sendWelcomeIfNeeded(leadId) {
         waMessageId,
       },
     });
-
     console.log(`[WhatsApp] Welcome sent to ${lead.phone}`);
-    // بنحقنه في الـ inbox كرسالة مننا عشان الموظف يشوف إن العميل اترد عليه
     pushToInbox(lead.id, `🤖 [Auto-reply sent]\n${WELCOME_TEXT}`, "outgoing").catch(() => {});
     return true;
   } catch (error) {
-    // بنرجّع الحجز عشان الرسالة الجاية تحاول تاني
+    // Release the claim so the next message retries
     await prisma.lead
       .update({ where: { id: leadId }, data: { welcomeSentAt: null } })
       .catch(() => {});
@@ -200,24 +165,17 @@ async function sendWelcomeIfNeeded(leadId) {
 }
 
 // ==========================================
-// Inbox Bridges
+// Inbox bridges (Chatwoot)
 // ==========================================
 
-// Chatwoot بيسمي الأنواع بشكل مختلف عن ميتا
 const FILE_TYPE_MAP = { image: "image", video: "video", audio: "audio", file: "document" };
 
-/**
- * بيبعت رسالة العميل للـ inbox عشان الفريق يشوفها ويرد.
- * بيتنده بعد الرد على ميتا. بيفشل بهدوء — الداتابيز هي مصدر الحقيقة.
- */
 async function pushToInbox(leadId, content, messageType = "incoming", mediaId = null) {
   if (!chatwoot.isConfigured() || !content) return;
-
   try {
     let lead = await prisma.lead.findUnique({ where: { id: leadId } });
     if (!lead) return;
 
-    // أول مرة: ننشئ الـ contact والمحادثة ونخزّن معرفاتهم
     if (!lead.inboxContactId) {
       const sourceId = await chatwoot.createContact(lead);
       lead = await prisma.lead.update({
@@ -225,7 +183,6 @@ async function pushToInbox(leadId, content, messageType = "incoming", mediaId = 
         data: { inboxContactId: sourceId },
       });
     }
-
     if (!lead.inboxConversationId) {
       const conversationId = await chatwoot.createConversation(lead.inboxContactId);
       lead = await prisma.lead.update({
@@ -234,15 +191,12 @@ async function pushToInbox(leadId, content, messageType = "incoming", mediaId = 
       });
     }
 
-    // لو فيه ميديا، بننقلها لـ Chatwoot. لو التنزيل فشل، بنبعت النص البديل
     const file = mediaId ? await downloadMedia(mediaId) : null;
-
     if (file) {
       await chatwoot.postAttachment(
         lead.inboxContactId,
         lead.inboxConversationId,
         file,
-        // الأقواس المربعة معناها نص بديل مش كابشن حقيقي
         content.startsWith("[") ? "" : content
       );
       console.log(`[Inbox] Pushed media for ${lead.phone}`);
@@ -260,48 +214,35 @@ async function pushToInbox(leadId, content, messageType = "incoming", mediaId = 
   }
 }
 
-/**
- * الموظف رد من الـ inbox → نبعت لواتساب ونسجّل.
- * بيدعم النص والمرفقات. الملفات بتتنقل من غير تخزين على السيرفر.
- */
 async function handleAgentReply(conversationId, content, attachments = []) {
   const lead = await prisma.lead.findFirst({
     where: { inboxConversationId: String(conversationId) },
   });
-
   if (!lead?.phone) {
     console.warn(`[Inbox] No lead found for conversation ${conversationId}`);
     return false;
   }
 
   let remainingText = content || "";
-
   for (const att of attachments) {
     const waType = FILE_TYPE_MAP[att.file_type];
     if (!waType) {
       console.warn(`[Inbox] Unsupported attachment type: ${att.file_type}`);
       continue;
     }
-
     try {
       const fileName = att.data_url?.split("/").pop()?.split("?")[0] || `file-${Date.now()}`;
-      // بننزّل بحد أوسع للصور عشان نضغطها بعدين — الفيديو مفيش ضغط
       const downloadLimit = waType === "image" ? 25 * 1024 * 1024 : SIZE_LIMITS[waType];
       let file = await downloadUrl(att.data_url, downloadLimit, fileName);
-
       if (file && waType === "image") {
         file = await compressIfNeeded(file);
-        // لسه كبيرة بعد الضغط؟ ميتا هترفضها
         if (file.blob.size > SIZE_LIMITS.image) file = null;
       }
-
       if (!file) {
         await sendText(lead.phone, FILE_FAILED_TEXT);
         continue;
       }
-
       const mediaId = await uploadMedia(file.blob, file.fileName, file.mimeType);
-      // الكابشن مع أول مرفق بس، عشان النص ميتكررش
       const waMessageId = await sendMedia(
         lead.phone,
         mediaId,
@@ -309,7 +250,6 @@ async function handleAgentReply(conversationId, content, attachments = []) {
         remainingText,
         file.fileName
       );
-
       await prisma.interaction.create({
         data: {
           leadId: lead.id,
@@ -320,8 +260,7 @@ async function handleAgentReply(conversationId, content, attachments = []) {
           waMessageId,
         },
       });
-
-      remainingText = ""; // اتبعت مع المرفق خلاص
+      remainingText = "";
       console.log(`[Inbox] Agent ${waType} sent to ${lead.phone}`);
     } catch (error) {
       console.error("[Inbox] Attachment failed:", error.message);
@@ -329,7 +268,6 @@ async function handleAgentReply(conversationId, content, attachments = []) {
     }
   }
 
-  // نص لوحده، أو نص مبعتش مع أي مرفق
   if (remainingText) {
     const waMessageId = await sendText(lead.phone, remainingText);
     await prisma.interaction.create({
@@ -343,50 +281,41 @@ async function handleAgentReply(conversationId, content, attachments = []) {
     });
     console.log(`[Inbox] Agent reply sent to ${lead.phone}`);
   }
-
   return true;
 }
 
 // ==========================================
-// Fetch Leads for the Discord Bot / Dashboard
+// Workspace-scoped CRUD
 // ==========================================
-async function getAllLeads() {
+
+async function getAllLeads(workspaceId) {
   return prisma.lead.findMany({
+    where: { workspaceId },
     include: {
       assignedTo: true,
-      interactions: {
-        orderBy: { createdAt: "desc" },
-        take: 10, // نجيب آخر رسايل بس عشان نعرضها في الملخص
-      },
+      interactions: { orderBy: { createdAt: "desc" }, take: 10 },
     },
     orderBy: { updatedAt: "desc" },
   });
 }
 
-// دالة لربط العميل بموظف (بالطريقة الآمنة وتحديث الشيت)
-const assignLead = async (leadId, employeeId) => {
+const assignLead = async (workspaceId, leadId, employeeId) => {
   const updatedLead = await prisma.lead.update({
-    where: { id: leadId },
-    data: {
-      assignedTo: {
-        connect: { id: employeeId },
-      },
-    },
+    where: { id: leadId, workspaceId },
+    data: { assignedTo: { connect: { id: employeeId } } },
     include: { assignedTo: true },
   });
-
   syncLeadToGoogleSheet(updatedLead).catch((err) =>
     console.error("[Sheets] Sync failed on assign:", err.message)
   );
-
   return updatedLead;
 };
 
-const updateLeadStatus = async (leadId, newStatus) => {
+const updateLeadStatus = async (workspaceId, leadId, newStatus) => {
   const updatedLead = await prisma.lead.update({
-    where: { id: leadId },
+    where: { id: leadId, workspaceId },
     data: { status: newStatus },
-    include: { assignedTo: true }, // عشان اسم الموظف يفضل موجود في الشيت
+    include: { assignedTo: true },
   });
   syncLeadToGoogleSheet(updatedLead).catch((err) =>
     console.error("[Sheets] Sync failed:", err.message)
@@ -394,10 +323,9 @@ const updateLeadStatus = async (leadId, newStatus) => {
   return updatedLead;
 };
 
-const getLeadStats = async () => {
-  const allLeads = await prisma.lead.findMany();
-
-  const stats = {
+const getLeadStats = async (workspaceId) => {
+  const allLeads = await prisma.lead.findMany({ where: { workspaceId } });
+  return {
     total: allLeads.length,
     byStatus: {
       NEW: allLeads.filter((l) => l.status === "NEW").length,
@@ -407,13 +335,11 @@ const getLeadStats = async () => {
       LOST: allLeads.filter((l) => l.status === "LOST").length,
     },
   };
-  return stats;
 };
 
-// دالة لإضافة ملاحظة جديدة للعميل
-const addLeadNote = async (leadId, noteContent) => {
+const addLeadNote = async (workspaceId, leadId, noteContent) => {
   const updatedLead = await prisma.lead.update({
-    where: { id: leadId },
+    where: { id: leadId, workspaceId },
     data: { notes: noteContent },
     include: { assignedTo: true },
   });
@@ -423,87 +349,67 @@ const addLeadNote = async (leadId, noteContent) => {
   return updatedLead;
 };
 
-const getLeadsByDateRange = async (startDate, endDate) => {
-  // بنحول التاريخ لنوع Date عشان Prisma يفهمه
+const getLeadsByDateRange = async (workspaceId, startDate, endDate) => {
   const start = new Date(startDate);
   const end = new Date(endDate);
-  // بنمدد تاريخ النهاية عشان يغطي اليوم كله
   end.setHours(23, 59, 59, 999);
-
-  return await prisma.lead.findMany({
-    where: {
-      createdAt: {
-        gte: start,
-        lte: end,
-      },
-    },
+  return prisma.lead.findMany({
+    where: { workspaceId, createdAt: { gte: start, lte: end } },
     orderBy: { createdAt: "desc" },
     include: { assignedTo: true },
   });
 };
 
-// دالة لحذف العميل بالكامل — الـ interactions بتتمسح بالـ cascade
-const deleteLead = async (leadId) => {
-  const lead = await prisma.lead.findUnique({ where: { id: leadId } });
+const deleteLead = async (workspaceId, leadId) => {
+  const lead = await prisma.lead.findFirst({ where: { id: leadId, workspaceId } });
   if (!lead) throw new Error("Lead not found");
-
-  const deletedLead = await prisma.lead.delete({
-    where: { id: leadId },
-  });
-
+  const deletedLead = await prisma.lead.delete({ where: { id: leadId } });
   deleteLeadFromSheet(deletedLead).catch((err) =>
     console.error("[Sheets] Delete failed:", err.message)
   );
   return deletedLead;
 };
 
-// دالة تعديل بيانات العميل الأساسية (الاسم، الرقم، المصدر)
-const editLead = async (leadId, updateData) => {
+const editLead = async (workspaceId, leadId, updateData) => {
   const updatedLead = await prisma.lead.update({
-    where: { id: leadId },
+    where: { id: leadId, workspaceId },
     data: {
       name: updateData.name !== undefined ? updateData.name : undefined,
       phone: updateData.phone !== undefined ? updateData.phone : undefined,
       source: updateData.source !== undefined ? updateData.source : undefined,
     },
-    include: { assignedTo: true }, // عشان الشيت يفضل محتفظ باسم الموظف
+    include: { assignedTo: true },
   });
-
   syncLeadToGoogleSheet(updatedLead).catch((err) =>
     console.error("[Sheets] Sync failed:", err.message)
   );
-
   return updatedLead;
 };
 
-// بيعيد بناء الشيت من الداتابيز — للاستخدام لو حد عدّل الشيت بإيده
-const syncSheetFromDatabase = async () => {
+const syncSheetFromDatabase = async (workspaceId) => {
   const leads = await prisma.lead.findMany({
+    where: { workspaceId },
     include: { assignedTo: true },
     orderBy: { createdAt: "asc" },
   });
   const stats = await rebuildLeadsSheet(leads);
   return { total: leads.length, ...stats };
 };
-/**
- * إضافة عميل يدوياً — للموظف اللي رد على تليفون أو استقبل حد في المقر.
- * بيرفض لو الرقم موجود عشان الموظف يشوف السجل القديم بدل ما يكرره.
- * ملحوظة: lastInboundAt بتفضل null — العميل ده مبعتش لنا، فمينفعش نبعتله
- * رسالة حرة، وبيتستبعد من الحملات لحد ما يرد.
- */
-const createLeadManual = async ({ name, phone, source, notes, addedByName }) => {
+
+// Manual lead add — rejects duplicates so the team sees the existing record
+// instead of creating a second one. lastInboundAt stays null: this contact
+// never messaged us, so free-form messages are not allowed (templates only).
+const createLeadManual = async (workspaceId, { name, phone, source, notes, addedByName }) => {
   const normalized = normalizePhone(phone);
   if (!normalized) {
     const error = new Error("Invalid phone number");
     error.code = "INVALID_PHONE";
     throw error;
   }
-
   const existing = await prisma.lead.findUnique({
-    where: { phone: normalized },
+    where: { workspaceId_phone: { workspaceId, phone: normalized } },
     include: { assignedTo: true },
   });
-
   if (existing) {
     const error = new Error("A lead with this phone number already exists");
     error.code = "DUPLICATE";
@@ -511,53 +417,36 @@ const createLeadManual = async ({ name, phone, source, notes, addedByName }) => 
     throw error;
   }
 
-  // مفيش اسم؟ بنستخدم آخر 4 أرقام عشان الموظف يعرف مين ده
   const finalName = name?.trim() || `Customer ${normalized.slice(-4)}`;
-
   const lead = await prisma.lead.create({
     data: {
+      workspaceId,
       name: finalName,
       phone: normalized,
       source: source || "MANUAL",
       status: "NEW",
       notes: notes || null,
-      // مصدر الموافقة — حماية لو ميتا سألت عن سبب التواصل
       optInSource: `Added manually${addedByName ? ` by ${addedByName}` : ""} - ${source || "MANUAL"}`,
     },
     include: { assignedTo: true },
   });
-
   syncLeadToGoogleSheet(lead).catch((err) => console.error("[Sheets] Sync failed:", err.message));
-
   console.log(`[CRM] Lead added manually: ${normalized}`);
   return lead;
 };
 
 const MAX_BULK = 400;
 
-/**
- * إضافة مجموعة أرقام مرة واحدة.
- *
- * المبدأ: رقم واحد بايظ ما يوقفش الدفعة. كل رقم بيتصنّف في واحدة من
- * تلاتة (اتضاف · مكرر · غلط) والتقرير بيرجع كامل عشان الموظف يصلّح
- * الغلط بس ويعيد لصقه.
- *
- * ملحوظة مهمة: زي createLeadManual، الـ lastInboundAt بتفضل null —
- * دول مبعتولناش، فمينفعش نبعتلهم رسايل حرة، والقالب هو الطريق الوحيد.
- */
-const createLeadsBulk = async ({ input, source, notes, addedByName }) => {
-  // الفاصل: سطر جديد أو فاصلة أو فاصلة منقوطة أو تاب
+const createLeadsBulk = async (workspaceId, { input, source, notes, addedByName }) => {
   const rawParts = String(input || "")
     .split(/[\n,;\t]+/)
     .map((p) => p.trim())
     .filter(Boolean);
-
   if (rawParts.length === 0) {
     const error = new Error("No phone numbers were provided");
     error.code = "EMPTY_INPUT";
     throw error;
   }
-
   if (rawParts.length > MAX_BULK) {
     const error = new Error(
       `Too many numbers at once (${rawParts.length}). The limit is ${MAX_BULK} per batch.`
@@ -569,40 +458,33 @@ const createLeadsBulk = async ({ input, source, notes, addedByName }) => {
   const added = [];
   const duplicates = [];
   const invalid = [];
-
-  // المكرر جوه نفس اللصقة — بيتمسك من غير ما نضرب الداتابيز
   const seen = new Set();
 
   for (const raw of rawParts) {
     const normalized = normalizePhone(raw);
-
     if (!normalized) {
       invalid.push(raw);
       continue;
     }
-
     if (seen.has(normalized)) {
       duplicates.push({ phone: normalized, reason: "repeated in this batch" });
       continue;
     }
     seen.add(normalized);
-
     try {
       const lead = await prisma.lead.create({
         data: {
+          workspaceId,
           name: `Customer ${normalized.slice(-4)}`,
           phone: normalized,
           source: source || "MANUAL",
           status: "NEW",
           notes: notes || null,
-          // مصدر الموافقة — حماية لو ميتا سألت عن سبب التواصل
           optInSource: `Bulk import${addedByName ? ` by ${addedByName}` : ""} - ${source || "MANUAL"}`,
         },
       });
       added.push(lead);
     } catch (error) {
-      // P2002 = القيد الفريد على الرقم اتكسر، يعني موجود قبل كده.
-      // بنعتمد على الداتابيز مش على فحص مسبق — أسرع وما فيهوش سباق.
       if (error.code === "P2002") {
         duplicates.push({ phone: normalized, reason: "already in the CRM" });
         continue;
@@ -611,10 +493,10 @@ const createLeadsBulk = async ({ input, source, notes, addedByName }) => {
     }
   }
 
-  // مزامنة واحدة في الآخر بدل نداء لكل عميل —
-  // 100 نداء ورا بعض بيضربوا حد جوجل وبيفشلوا كلهم.
+  // One batched sheet rebuild instead of N sequential calls (Google rate limits)
   if (added.length > 0) {
     const allLeads = await prisma.lead.findMany({
+      where: { workspaceId },
       include: { assignedTo: true },
       orderBy: { createdAt: "asc" },
     });
@@ -626,7 +508,6 @@ const createLeadsBulk = async ({ input, source, notes, addedByName }) => {
   console.log(
     `[CRM] Bulk add: ${added.length} added, ${duplicates.length} duplicate, ${invalid.length} invalid`
   );
-
   return {
     submitted: rawParts.length,
     addedCount: added.length,
@@ -637,6 +518,7 @@ const createLeadsBulk = async ({ input, source, notes, addedByName }) => {
     invalid,
   };
 };
+
 module.exports = {
   handleIncomingMessage,
   sendWelcomeIfNeeded,

@@ -1,9 +1,10 @@
-// بيبلّغ بوت الديسكورد بالأحداث عن طريق شبكة Railway الداخلية
+// Notifies the Discord bot about events over the private network / localhost.
+// The bot runs an internal Express server (src/server.js) that only the API can reach.
 
-const BOT_URL = process.env.BOT_NOTIFY_URL || "http://discord-bot.railway.internal:3001";
-//
+const BOT_URL = process.env.BOT_NOTIFY_URL || "http://localhost:3001";
+
 async function notifyBot(path, payload) {
-  // مفيش لينك أو مفتاح؟ نسكت — التنبيهات مش حرجة
+  // No API key configured? Skip silently — notifications are non-critical.
   if (!process.env.INTERNAL_API_KEY) return;
 
   const controller = new AbortController();
@@ -23,6 +24,8 @@ async function notifyBot(path, payload) {
       console.error(`[Notify] Bot returned ${response.status}`);
     }
   } catch (error) {
+    // ECONNREFUSED happens if the bot is down or the URL is wrong.
+    // We log it but never throw — a failed notification must not crash a webhook.
     console.error(
       "[Notify] Could not reach the bot:",
       error.message,

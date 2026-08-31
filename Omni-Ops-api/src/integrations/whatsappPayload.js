@@ -1,12 +1,7 @@
-// بيفك الـ payload المعقد بتاع ميتا ويطلّع منه رسايل بشكل موحد.
-// مفيش أي حاجة هنا بتلمس الداتابيز، وأي دالة هنا مبترميش استثناء أبداً —
-// أي حقل ناقص بيرجع تجاهل للرسالة بدل ما السيرفر يقع.
+// Unpacks Meta's complex webhook payload into a unified message format.
+// Nothing here touches the database, and no function here ever throws an exception —
+// missing fields result in the message being ignored rather than crashing the server.
 
-/**
- * بيحوّل الرسالة لنص نعرضه، حسب نوعها.
- * النصوص البديلة إنجليزي لأن الموظفين بيشوفوها في الـ inbox والديسكورد.
- * ملحوظة: content في الداتابيز مش nullable، فلازم يرجع نص دايماً.
- */
 function extractContent(message) {
   const type = message?.type;
 
@@ -29,7 +24,7 @@ function extractContent(message) {
       };
 
     case "audio":
-      // voice=true معناها رسالة صوتية، false معناها ملف صوت مرفوع
+      // voice=true means voice note, false means uploaded audio file
       return {
         content: message.audio?.voice ? "[Voice note]" : "[Audio]",
         mediaType: "audio",
@@ -63,7 +58,6 @@ function extractContent(message) {
     case "reaction":
       return { content: `[Reaction] ${message.reaction?.emoji || ""}`.trim(), mediaType: null };
 
-    // ردود الأزرار والقوايم التفاعلية
     case "button":
       return { content: message.button?.text || "[Button click]", mediaType: null };
 
@@ -81,7 +75,7 @@ function extractContent(message) {
   }
 }
 
-/** ميتا بتبعت الوقت بالثواني، وجافاسكريبت عايزاه بالملي */
+// Meta sends time in seconds, JS wants milliseconds
 function parseTimestamp(ts) {
   const seconds = Number(ts);
   if (!Number.isFinite(seconds) || seconds <= 0) return new Date();
@@ -89,10 +83,8 @@ function parseTimestamp(ts) {
   return isNaN(date.getTime()) ? new Date() : date;
 }
 
-/**
- * بيلف على كل الـ entries والـ changes (ميتا بتبعت دفعات، مش عنصر واحد)
- * وبيرجع مصفوفة رسايل جاهزة. تحديثات الحالة بتتجاهل بهدوء.
- */
+// Loops through all entries and changes (Meta sends batches, not single items)
+// and returns an array of ready-to-process messages. Status updates are silently ignored.
 function extractMessages(body) {
   const out = [];
 
@@ -104,9 +96,9 @@ function extractMessages(body) {
     for (const change of changes) {
       const value = change?.value;
       const messages = Array.isArray(value?.messages) ? value.messages : [];
-      if (messages.length === 0) continue; // تحديثات التسليم والقراءة
+      if (messages.length === 0) continue; // Delivery/read receipts
 
-      // خريطة الأسماء: wa_id → اسم البروفايل
+      // Map wa_id to profile name
       const names = {};
       for (const c of Array.isArray(value.contacts) ? value.contacts : []) {
         if (c?.wa_id) names[c.wa_id] = c.profile?.name;
@@ -116,7 +108,6 @@ function extractMessages(body) {
         const waMessageId = message?.id;
         const from = message?.from;
 
-        // من غير المعرّف مقدرش أمنع التكرار، ومن غير الرقم مقدرش أعرف مين
         if (!waMessageId || !from) {
           console.warn("[WhatsApp] Skipped a message with no id or sender");
           continue;

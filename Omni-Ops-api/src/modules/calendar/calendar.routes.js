@@ -1,24 +1,12 @@
 const express = require("express");
 const router = express.Router();
-const {
-  createEvent,
-  getEvents,
-  updateEvent,
-  deleteEvent,
-  createClass,
-  getClasses,
-  deleteClass,
-  updateClass,
-  syncCalendarAccess,
-  createClassesBulk,
-  createEventsBulk, // 👈 دي اللي كانت ناقصة وعملت الايرور
-  backfillAccounting,
-} = require("./calendar.service");
+const svc = require("./calendar.service");
 
-// ========================== Events Routes ==========================
+// ══════════════════════════ EVENTS ══════════════════════════
+
 router.post("/events", async (req, res) => {
   try {
-    const event = await createEvent(req.body);
+    const event = await svc.createEvent(req.workspace, req.body);
     res.status(201).json(event);
   } catch (error) {
     res.status(500).json({ error: error.message });
@@ -27,7 +15,7 @@ router.post("/events", async (req, res) => {
 
 router.post("/events/bulk", async (req, res) => {
   try {
-    const result = await createEventsBulk(req.body);
+    const result = await svc.createEventsBulk(req.workspace, req.body);
     res.status(201).json(result);
   } catch (error) {
     res.status(500).json({ error: error.message });
@@ -36,8 +24,7 @@ router.post("/events/bulk", async (req, res) => {
 
 router.get("/events", async (req, res) => {
   try {
-    const events = await getEvents();
-    res.json(events);
+    res.json(await svc.getEvents(req.workspace));
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
@@ -45,72 +32,75 @@ router.get("/events", async (req, res) => {
 
 router.patch("/events/:id", async (req, res) => {
   try {
-    const event = await updateEvent(req.params.id, req.body, req.query.scope);
-    res.json(event);
+    res.json(await svc.updateEvent(req.workspace, req.params.id, req.body, req.query.scope));
   } catch (error) {
+    if (error.message === "Event not found") return res.status(404).json({ error: error.message });
     res.status(500).json({ error: error.message });
   }
 });
 
 router.delete("/events/:id", async (req, res) => {
   try {
-    const event = await deleteEvent(req.params.id, req.query.scope);
-    res.json(event);
+    res.json(await svc.deleteEvent(req.workspace, req.params.id, req.query.scope));
+  } catch (error) {
+    if (error.message === "Event not found") return res.status(404).json({ error: error.message });
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// ══════════════════════════ APPOINTMENTS ══════════════════════════
+
+router.post("/appointments", async (req, res) => {
+  try {
+    const appointment = await svc.createAppointment(req.workspace, req.body);
+    res.status(201).json(appointment);
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
 });
 
-// ========================== Classes Routes ==========================
-router.post("/classes", async (req, res) => {
+router.get("/appointments", async (req, res) => {
   try {
-    const schoolClass = await createClass(req.body);
-    res.status(201).json(schoolClass);
+    res.json(await svc.getAppointments(req.workspace));
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
 });
 
-router.get("/classes", async (req, res) => {
+router.patch("/appointments/:id", async (req, res) => {
   try {
-    const classes = await getClasses();
-    res.json(classes);
+    res.json(await svc.updateAppointment(req.workspace, req.params.id, req.body));
   } catch (error) {
+    if (error.message === "Appointment not found")
+      return res.status(404).json({ error: error.message });
     res.status(500).json({ error: error.message });
   }
 });
 
-router.patch("/classes/:id", async (req, res) => {
+router.delete("/appointments/:id", async (req, res) => {
   try {
-    const schoolClass = await updateClass(req.params.id, req.body);
-    res.json(schoolClass);
+    res.json(await svc.deleteAppointment(req.workspace, req.params.id));
   } catch (error) {
+    if (error.message === "Appointment not found")
+      return res.status(404).json({ error: error.message });
     res.status(500).json({ error: error.message });
   }
 });
 
-router.delete("/classes/:id", async (req, res) => {
+router.post("/appointments/bulk", async (req, res) => {
   try {
-    const schoolClass = await deleteClass(req.params.id);
-    res.json(schoolClass);
-  } catch (error) {
-    res.status(500).json({ error: error.message });
-  }
-});
-
-// ========================== Sync & Bulk Routes ==========================
-router.post("/classes/bulk", async (req, res) => {
-  try {
-    const result = await createClassesBulk(req.body);
+    const result = await svc.createAppointmentsBulk(req.workspace, req.body);
     res.status(201).json(result);
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
 });
 
+// ══════════════════════════ SYNC & BACKFILL ══════════════════════════
+
 router.post("/sync", async (req, res) => {
   try {
-    const result = await syncCalendarAccess();
+    const result = await svc.syncCalendarAccess(req.workspace);
     res.json({ synced: result });
   } catch (error) {
     res.status(500).json({ error: error.message });
@@ -119,8 +109,7 @@ router.post("/sync", async (req, res) => {
 
 router.post("/accounting/backfill", async (req, res) => {
   try {
-    const result = await backfillAccounting();
-    res.json(result);
+    res.json(await svc.backfillAccounting(req.workspace));
   } catch (error) {
     res.status(500).json({ error: error.message });
   }

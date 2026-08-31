@@ -144,7 +144,7 @@ module.exports = {
     let employee;
     try {
       const empResponse = await axios.get(
-        `${process.env.API_URL}/employees/external/${interaction.user.id}`
+        `/employees/external/${interaction.user.id}`
       );
       employee = empResponse.data;
     } catch (err) {
@@ -160,7 +160,7 @@ module.exports = {
           doneTasks = 0;
         try {
           const tasksResponse = await axios.get(
-            `${process.env.API_URL}/tasks/employee/${employee.id}`
+            `/tasks/employee/${employee.id}`
           );
           const tasks = tasksResponse.data;
           activeTasks = tasks.filter((t) => ["pending", "in_progress"].includes(t.status)).length;
@@ -203,7 +203,7 @@ module.exports = {
 
       if (subcommand === "tasks") {
         const tasksResponse = await axios.get(
-          `${process.env.API_URL}/tasks/employee/${employee.id}`
+          `/tasks/employee/${employee.id}`
         );
         let filteredTasks = tasksResponse.data;
 
@@ -307,7 +307,7 @@ module.exports = {
 
       if (subcommand === "appointments") {
         // Updated endpoint to match new Appointment architecture
-        const response = await axios.get(`${process.env.API_URL}/calendar/appointments`);
+        const response = await axios.get(`/calendar/appointments`);
         const targetPeriod = interaction.options.getString("period");
         const targetMonth = interaction.options.getInteger("month");
         const now = new Date();
@@ -390,7 +390,7 @@ module.exports = {
       }
 
       if (subcommand === "calendar") {
-        const response = await axios.get(`${process.env.API_URL}/calendar/events`);
+        const response = await axios.get(`/calendar/events`);
         const targetMonth = interaction.options.getInteger("month");
         const currentYear = new Date().getFullYear();
         let filteredEvents = [];
@@ -450,7 +450,7 @@ module.exports = {
 
       if (subcommand === "performance") {
         const tasksResponse = await axios.get(
-          `${process.env.API_URL}/tasks/employee/${employee.id}`
+          `/tasks/employee/${employee.id}`
         );
         const tasks = tasksResponse.data;
 
@@ -498,7 +498,7 @@ module.exports = {
           return interaction.editReply("❌ Maximum reminder is 30 days.");
 
         if (unit === "off") {
-          await axios.patch(`${process.env.API_URL}/employees/${employee.id}/reminder`, {
+          await axios.patch(`/employees/${employee.id}/reminder`, {
             reminderEnabled: false,
             reminderValue: 0,
             reminderUnit: "off",
@@ -506,7 +506,7 @@ module.exports = {
           return interaction.editReply("🔕 Global reminders disabled.");
         }
 
-        await axios.patch(`${process.env.API_URL}/employees/${employee.id}/reminder`, {
+        await axios.patch(`/employees/${employee.id}/reminder`, {
           reminderEnabled: true,
           reminderValue: value,
           reminderUnit: unit,

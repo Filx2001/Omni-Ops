@@ -1,6 +1,7 @@
 const prisma = require("../../prisma");
 
 async function logAction({
+  workspaceId,
   actorId = null,
   actorType = "system",
   action,
@@ -11,6 +12,7 @@ async function logAction({
 }) {
   return prisma.auditLog.create({
     data: {
+      workspaceId,
       actorId,
       actorType,
       action,

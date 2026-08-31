@@ -118,7 +118,7 @@ module.exports = {
     .addSubcommand((sub) =>
       sub
         .setName("delete")
-        .setDescription("❌ Delete a lead completely from CRM & Google Sheets")
+        .setDescription("❌ Delete a lead completely from CRM")
         .addStringOption((option) =>
           option
             .setName("query")
@@ -204,7 +204,7 @@ module.exports = {
         )
     )
     .addSubcommand((sub) =>
-      sub.setName("sync").setDescription("🔄 Rebuild the Google Sheet from the database")
+      sub.setName("sync").setDescription("🔄 Rebuild the external leads sheet from the database")
     ),
 
   async execute(interaction) {
@@ -261,7 +261,7 @@ module.exports = {
     try {
       // 1. Permission check
       const employeeResponse = await axios.get(
-        `${process.env.API_URL}/employees/external/${interaction.user.id}`
+        `/employees/external/${interaction.user.id}`
       );
       const currentEmployee = employeeResponse.data;
       const allowedRoles = ["Admin", "Manager", "Sales", "Support", "Marketing"];
@@ -279,7 +279,7 @@ module.exports = {
         return interaction.editReply("❌ Only Management can delete, edit, or sync lead records.");
       }
 
-      const response = await axios.get(`${process.env.API_URL}/crm/leads`);
+      const response = await axios.get(`/crm/leads`);
       let leads = response.data;
       const statusMap = {
         NEW: "🆕 New",
@@ -414,7 +414,7 @@ module.exports = {
         );
         if (!lead) return interaction.editReply(`❌ No lead found matching **${query}**.`);
         const updateResponse = await axios.patch(
-          `${process.env.API_URL}/crm/leads/${lead.id}/assign`,
+          `/crm/leads/${lead.id}/assign`,
           { employeeId }
         );
         clearCache("leads_list");
@@ -441,7 +441,7 @@ module.exports = {
         if (!lead) return interaction.editReply(`❌ No lead found matching **${query}**.`);
         const oldStatus = lead.status;
         const updateResponse = await axios.patch(
-          `${process.env.API_URL}/crm/leads/${lead.id}/status`,
+          `/crm/leads/${lead.id}/status`,
           { status: newStatus }
         );
         clearCache("leads_list");
@@ -464,7 +464,7 @@ module.exports = {
       }
       // ========================== Stats ==========================
       else if (subcommand === "stats") {
-        const statsResponse = await axios.get(`${process.env.API_URL}/crm/leads/stats`);
+        const statsResponse = await axios.get(`/crm/leads/stats`);
         const stats = statsResponse.data;
         const conversionRate =
           stats.total > 0 ? ((stats.byStatus.CONVERTED / stats.total) * 100).toFixed(1) : 0;
@@ -485,13 +485,13 @@ module.exports = {
       }
       // ========================== Sync ==========================
       else if (subcommand === "sync") {
-        const response = await axios.post(`${process.env.API_URL}/crm/leads/sync`);
+        const response = await axios.post(`/crm/leads/sync`);
         const { total, tabs, rows, clearedTabs } = response.data;
         clearCache("leads_list");
         const embed = new EmbedBuilder()
           .setColor(EMBED_COLORS.SUCCESS || 0x00ff00)
-          .setTitle("🔄 Google Sheet Rebuilt")
-          .setDescription("The sheet now matches the database exactly.")
+          .setTitle("🔄 Leads Sheet Rebuilt")
+          .setDescription("The external leads sheet now matches the database exactly.")
           .addFields(
             { name: "👥 Leads in database", value: `${total}`, inline: true },
             { name: "📄 Tabs written", value: `${tabs}`, inline: true },
@@ -515,7 +515,7 @@ module.exports = {
         const source = interaction.options.getString("source") || "MANUAL";
         const notes = interaction.options.getString("notes");
         try {
-          const { data: lead } = await axios.post(`${process.env.API_URL}/crm/leads`, {
+          const { data: lead } = await axios.post(`/crm/leads`, {
             phone,
             name,
             source,
@@ -568,7 +568,7 @@ module.exports = {
           }
           if (error.response?.status === 400) {
             return interaction.editReply(
-              "❌ Invalid phone number. Use a local number (55512345) or an international one (+15551234567)."
+              "❌ Invalid phone number. Use an international number like +15551234567, or a configured local format."
             );
           }
           throw error;
@@ -586,7 +586,7 @@ module.exports = {
         );
         if (!lead) return interaction.editReply(`❌ No lead found matching **${query}**.`);
         const updateResponse = await axios.patch(
-          `${process.env.API_URL}/crm/leads/${lead.id}/note`,
+          `/crm/leads/${lead.id}/note`,
           { note: content }
         );
         clearCache("leads_list");
@@ -607,13 +607,13 @@ module.exports = {
             (l.name && l.name.toLowerCase().includes(query.toLowerCase()))
         );
         if (!lead) return interaction.editReply(`❌ No lead found matching **${query}**.`);
-        await axios.delete(`${process.env.API_URL}/crm/leads/${lead.id}`);
+        await axios.delete(`/crm/leads/${lead.id}`);
         clearCache("leads_list");
         const embed = new EmbedBuilder()
           .setColor(0xff0000)
           .setTitle("🗑️ Lead Deleted Successfully")
           .setDescription(
-            `**${lead.name || "Unknown"}** (${lead.phone || "No Phone"}) has been completely removed from the CRM and Google Sheets.`
+            `**${lead.name || "Unknown"}** (${lead.phone || "No Phone"}) has been completely removed from the CRM.`
           )
           .setFooter({ text: `Deleted by ${interaction.user.username}` })
           .setTimestamp();
@@ -640,7 +640,7 @@ module.exports = {
         if (newName) updatePayload.name = newName;
         if (newPhone) updatePayload.phone = newPhone;
         const updateResponse = await axios.patch(
-          `${process.env.API_URL}/crm/leads/${lead.id}/edit`,
+          `/crm/leads/${lead.id}/edit`,
           updatePayload
         );
         clearCache("leads_list");
@@ -648,7 +648,7 @@ module.exports = {
         const embed = new EmbedBuilder()
           .setColor(0x2ecc71)
           .setTitle("✏️ Lead Updated Successfully")
-          .setDescription(`Lead details have been updated and synced to Google Sheets.`)
+          .setDescription("Lead details have been updated.")
           .addFields(
             { name: "👤 Name", value: updatedLead.name || "Unknown", inline: true },
             { name: "📱 Phone", value: updatedLead.phone || "N/A", inline: true }
@@ -684,7 +684,7 @@ module.exports = {
     }
     await interaction.deferReply({ ephemeral: true });
     try {
-      const response = await axios.get(`${process.env.API_URL}/crm/leads/filter`, {
+      const response = await axios.get(`/crm/leads/filter`, {
         params: { startDate: startDate.toISOString(), endDate: endDate.toISOString() },
       });
       const leads = response.data;
@@ -718,14 +718,14 @@ module.exports = {
     await interaction.deferReply({ ephemeral: true });
     try {
       const employeeResponse = await axios.get(
-        `${process.env.API_URL}/employees/external/${interaction.user.id}`
+        `/employees/external/${interaction.user.id}`
       );
       const currentEmployee = employeeResponse.data;
       const allowedRoles = ["Admin", "Manager", "Sales", "Marketing"];
       if (!allowedRoles.includes(currentEmployee.role?.name)) {
         return interaction.editReply("❌ Unauthorized to add leads in bulk.");
       }
-      const { data } = await axios.post(`${process.env.API_URL}/crm/leads/bulk`, {
+      const { data } = await axios.post(`/crm/leads/bulk`, {
         input: phones,
         source,
         notes,

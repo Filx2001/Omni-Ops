@@ -184,7 +184,7 @@ module.exports = {
         let assigneeIds = [];
         if (externalIds.length > 0) {
           try {
-            const employeesRes = await axios.get(`${process.env.API_URL}/employees`);
+            const employeesRes = await axios.get(`/employees`);
             assigneeIds = employeesRes.data
               .filter((emp) => externalIds.includes(emp.externalId))
               .map((emp) => emp.id);
@@ -254,7 +254,7 @@ module.exports = {
         if (eventsArray.length === 0)
           return interaction.editReply("❌ No valid dates could be processed.");
 
-        const bulkRes = await axios.post(`${process.env.API_URL}/calendar/events/bulk`, {
+        const bulkRes = await axios.post(`/calendar/events/bulk`, {
           events: eventsArray,
         });
         clearCache("events_list");
@@ -290,7 +290,7 @@ module.exports = {
       }
       // ========================= LIST =========================
       else if (subcommand === "list") {
-        const response = await axios.get(`${process.env.API_URL}/calendar/events`);
+        const response = await axios.get(`/calendar/events`);
         const events = response.data;
         const upcomingEvents = events.filter((e) => new Date(e.endDate) > new Date());
         if (!upcomingEvents.length) return interaction.editReply("📭 No upcoming events found.");
@@ -327,7 +327,7 @@ module.exports = {
         const description = interaction.options.getString("description");
         const assigned = interaction.options.getString("assigned");
 
-        const eventToEditResponse = await axios.get(`${process.env.API_URL}/calendar/events`);
+        const eventToEditResponse = await axios.get(`/calendar/events`);
         const existingEvent = eventToEditResponse.data.find((e) => e.id === eventId);
         if (!existingEvent) return interaction.editReply("❌ Event not found.");
 
@@ -361,7 +361,7 @@ module.exports = {
             } catch (err) {}
           }
           dbDescription += `👥 Assigned To: ${plainNamesAssigned}`;
-          const employeesRes = await axios.get(`${process.env.API_URL}/employees`);
+          const employeesRes = await axios.get(`/employees`);
           updateData.assigneeIds = employeesRes.data
             .filter((emp) => externalIds.includes(emp.externalId))
             .map((emp) => emp.id);
@@ -379,7 +379,7 @@ module.exports = {
         }
 
         const updRes = await axios.patch(
-          `${process.env.API_URL}/calendar/events/${eventId}?scope=${scope}`,
+          `/calendar/events/${eventId}?scope=${scope}`,
           updateData
         );
         clearCache("events_list");
@@ -417,7 +417,7 @@ module.exports = {
           "⏳ Syncing DB emails with Google Calendar... This might take a minute."
         );
         try {
-          await axios.post(`${process.env.API_URL}/calendar/sync`);
+          await axios.post(`/calendar/sync`);
           const embed = new EmbedBuilder()
             .setColor(EMBED_COLORS.SUCCESS || EMBED_COLORS.INFO)
             .setTitle("✅ Calendar Sync Complete")
@@ -439,7 +439,7 @@ module.exports = {
         await interaction.editReply(
           "⏳ Exporting all existing appointments & events to the accounting sheet... This might take a minute."
         );
-        const response = await axios.post(`${process.env.API_URL}/calendar/accounting/backfill`);
+        const response = await axios.post(`/calendar/accounting/backfill`);
         const apptCount = response.data.appointments ?? response.data.classes ?? 0;
         const eventCount = response.data.events ?? 0;
         const rowsAdded = response.data.rowsAdded ?? 0;
@@ -469,7 +469,7 @@ module.exports = {
         const scope = scopeResult.scope;
 
         const delRes = await axios.delete(
-          `${process.env.API_URL}/calendar/events/${eventId}?scope=${scope}`
+          `/calendar/events/${eventId}?scope=${scope}`
         );
         clearCache("events_list");
 

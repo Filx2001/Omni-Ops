@@ -2,7 +2,7 @@ const { SlashCommandBuilder, EmbedBuilder, MessageFlags } = require("discord.js"
 const axios = require("../utils/axiosInstance");
 const { clearCache } = require("../utils/cache");
 const EMBED_COLORS = require("../utils/embedColors");
-const { parseQatarDateTime, isValidYear, parseSeriesDates } = require("../utils/dateParser"); // Note: You may want to rename parseQatarDateTime to parseLocalDateTime later
+const { parseLocalDateTime, isValidYear, parseSeriesDates } = require("../utils/dateParser"); // Note: You may want to rename parseLocalDateTime to parseLocalDateTime later
 const { handleGlobalAutocomplete } = require("../utils/autocompleteHelper");
 const { requireRole, MANAGEMENT_ROLES } = require("../utils/requireRole");
 const { notifyAppointment, notifyScheduleChannel } = require("../utils/dmNotifier"); // Note: renamed from notifyClass
@@ -230,7 +230,7 @@ module.exports = {
         }
 
         const appointmentsResponse = await axios.get(
-          `${process.env.API_URL}/calendar/appointments`
+          `/calendar/appointments`
         );
         const existingAppointments = appointmentsResponse.data;
 
@@ -251,8 +251,8 @@ module.exports = {
           const skipped = [];
 
           for (const dStr of dateStrings) {
-            const sRes = parseQatarDateTime(dStr, startTimeInput); // Consider renaming this utility function later
-            const eRes = parseQatarDateTime(dStr, endTimeInput || startTimeInput);
+            const sRes = parseLocalDateTime(dStr, startTimeInput); // Consider renaming this utility function later
+            const eRes = parseLocalDateTime(dStr, endTimeInput || startTimeInput);
 
             if (!sRes || !eRes) {
               skipped.push(`${dStr} (invalid date)`);
@@ -307,7 +307,7 @@ module.exports = {
             );
           }
 
-          const bulkRes = await axios.post(`${process.env.API_URL}/calendar/appointments/bulk`, {
+          const bulkRes = await axios.post(`/calendar/appointments/bulk`, {
             appointments: valid,
           });
 
@@ -354,8 +354,8 @@ module.exports = {
           return;
         }
 
-        const startResult = parseQatarDateTime(dateInput, startTimeInput);
-        const endResult = parseQatarDateTime(dateInput, endTimeInput || startTimeInput);
+        const startResult = parseLocalDateTime(dateInput, startTimeInput);
+        const endResult = parseLocalDateTime(dateInput, endTimeInput || startTimeInput);
 
         if (!startResult || !endResult) {
           return interaction.editReply("❌ Invalid date/time format.");
@@ -399,7 +399,7 @@ module.exports = {
           }
         }
 
-        const response = await axios.post(`${process.env.API_URL}/calendar/appointments`, {
+        const response = await axios.post(`/calendar/appointments`, {
           title,
           day: dayInput || null,
           startTime,
@@ -439,7 +439,7 @@ module.exports = {
         }
         await notifyScheduleChannel(interaction.client, interaction.guildId, embed);
       } else if (subcommand === "list") {
-        const response = await axios.get(`${process.env.API_URL}/calendar/appointments`);
+        const response = await axios.get(`/calendar/appointments`);
         const appointments = response.data;
 
         const upcomingAppointments = appointments.filter((a) => new Date(a.endTime) > new Date());
@@ -488,7 +488,7 @@ module.exports = {
           );
         }
 
-        const apptToEditResponse = await axios.get(`${process.env.API_URL}/calendar/appointments`);
+        const apptToEditResponse = await axios.get(`/calendar/appointments`);
         const existingAppointments = apptToEditResponse.data;
         const apptToEdit = existingAppointments.find((a) => a.id === appointmentId);
 
@@ -523,8 +523,8 @@ module.exports = {
           const fallbackStartStr = startTimeInput || formatTime(origStartObj);
           const fallbackEndStr = endTimeInput || formatTime(origEndObj);
 
-          const startResult = parseQatarDateTime(fallbackDateStr, fallbackStartStr);
-          const endResult = parseQatarDateTime(fallbackDateStr, fallbackEndStr);
+          const startResult = parseLocalDateTime(fallbackDateStr, fallbackStartStr);
+          const endResult = parseLocalDateTime(fallbackDateStr, fallbackEndStr);
 
           if (!startResult || !endResult) {
             return interaction.editReply("❌ Invalid date/time format.");
@@ -616,8 +616,8 @@ module.exports = {
                 return `${h}:${mm.toString().padStart(2, "0")} ${ap}`;
               };
 
-              const sR = parseQatarDateTime(dStr, startTimeInput || fmt(o));
-              const eR = parseQatarDateTime(dStr, endTimeInput || fmt(oe));
+              const sR = parseLocalDateTime(dStr, startTimeInput || fmt(o));
+              const eR = parseLocalDateTime(dStr, endTimeInput || fmt(oe));
 
               if (!sR || !eR) {
                 seriesSkipped.push(`${dStr} (invalid time)`);
@@ -650,7 +650,7 @@ module.exports = {
             }
 
             await axios.patch(
-              `${process.env.API_URL}/calendar/appointments/${appt.id}`,
+              `/calendar/appointments/${appt.id}`,
               apptUpdate
             );
             updatedCount++;
@@ -678,7 +678,7 @@ module.exports = {
         }
 
         const response = await axios.patch(
-          `${process.env.API_URL}/calendar/appointments/${appointmentId}`,
+          `/calendar/appointments/${appointmentId}`,
           updateData
         );
 
@@ -724,7 +724,7 @@ module.exports = {
         const scope = interaction.options.getString("scope") || "this";
 
         if (scope === "series") {
-          const allAppointments = (await axios.get(`${process.env.API_URL}/calendar/appointments`))
+          const allAppointments = (await axios.get(`/calendar/appointments`))
             .data;
           const target = allAppointments.find((a) => a.id === cleanId);
 
@@ -739,7 +739,7 @@ module.exports = {
           const groupAppointments = allAppointments.filter((a) => a.groupId === target.groupId);
 
           for (const appt of groupAppointments) {
-            await axios.delete(`${process.env.API_URL}/calendar/appointments/${appt.id}`);
+            await axios.delete(`/calendar/appointments/${appt.id}`);
           }
 
           clearCache("appointments_list");
@@ -768,7 +768,7 @@ module.exports = {
         }
 
         const response = await axios.delete(
-          `${process.env.API_URL}/calendar/appointments/${cleanId}`
+          `/calendar/appointments/${cleanId}`
         );
         clearCache("appointments_list");
 

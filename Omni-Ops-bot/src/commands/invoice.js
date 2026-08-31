@@ -157,7 +157,7 @@ module.exports = {
         const statusInput = interaction.options.getString("status") || "PENDING";
         const issuedByName = interaction.member?.displayName || interaction.user.username;
 
-        const response = await axios.post(`${process.env.API_URL}/invoices`, {
+        const response = await axios.post(`/invoices`, {
           customerName: clientName,
           category: activityType,
           description,
@@ -261,7 +261,7 @@ module.exports = {
               const clientEmail = modalSubmit.fields.getTextInputValue("client_email");
               await modalSubmit.deferReply({ flags: MessageFlags.Ephemeral });
 
-              await axios.post(`${process.env.API_URL}/invoices/${invoice.id}/send`, {
+              await axios.post(`/invoices/${invoice.id}/send`, {
                 email: clientEmail,
               });
 
@@ -296,14 +296,14 @@ module.exports = {
         const invoiceId = interaction.options.getString("invoice_id");
         const status = interaction.options.getString("status");
 
-        const invoicesResponse = await axios.get(`${process.env.API_URL}/invoices`);
+        const invoicesResponse = await axios.get(`/invoices`);
         const invoicesList = invoicesResponse.data.invoices || invoicesResponse.data;
         const invoiceToUpdate = invoicesList.find((b) => b.id === invoiceId);
         const refDisplay = invoiceToUpdate
           ? `INV-${invoiceToUpdate.invoiceNumber}`
           : "The selected invoice";
 
-        await axios.patch(`${process.env.API_URL}/invoices/${invoiceId}/status`, { status });
+        await axios.patch(`/invoices/${invoiceId}/status`, { status });
         clearCache("invoices_list");
 
         const embed = new EmbedBuilder()
@@ -352,7 +352,7 @@ module.exports = {
         if (endDate) params.append("endDate", endDate);
 
         try {
-          const response = await axios.get(`${process.env.API_URL}/invoices?${params.toString()}`);
+          const response = await axios.get(`/invoices?${params.toString()}`);
           const data = response.data;
           const invoices = data.invoices || data;
           const totalAmount = data.totalAmount || invoices.reduce((sum, b) => sum + b.netAmount, 0);

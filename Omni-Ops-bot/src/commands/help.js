@@ -206,7 +206,7 @@ module.exports = {
       let employee = null;
       try {
         const response = await axios.get(
-          `${process.env.API_URL}/employees/external/${interaction.user.id}`
+          `/employees/external/${interaction.user.id}`
         );
         employee = response.data;
       } catch (err) {

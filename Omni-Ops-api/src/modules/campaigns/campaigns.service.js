@@ -1,36 +1,27 @@
 const prisma = require("../../prisma");
-const { sendTemplate, getTemplates, uploadMedia, SIZE_LIMITS } = require("../../utils/whatsapp");
-const { downloadUrl } = require("../../utils/whatsappMedia");
+const {
+  sendTemplate,
+  getTemplates,
+  uploadMedia,
+  SIZE_LIMITS,
+} = require("../../integrations/whatsapp");
+const { downloadUrl } = require("../../integrations/whatsappMedia");
 
-// حد أدنى صارم لفترة التهدئة — أقل من كده بيبقى سبام
 const MIN_COOLDOWN_DAYS = 7;
 const DEFAULT_COOLDOWN_DAYS = 14;
-
-// سقف لأي فلتر بالأيام — بيمنع أرقام غريبة زي 99999 تعمل تواريخ ملهاش معنى
 const MAX_FILTER_DAYS = 730;
-
-// سرعة الإرسال: رسالة كل ثانيتين = 30 في الدقيقة.
-// بطيء عن قصد — الدفعات المفاجئة بتضر تقييم الجودة عند ميتا.
+// 1 message / 2s = 30/min — slow on purpose; sudden bursts hurt Meta quality rating
 const SEND_INTERVAL_MS = 2000;
-// حد أقصى للدفعة الواحدة — بيخليك تراقب التقييم قبل ما تكمّل
 const MAX_BATCH = Number(process.env.CAMPAIGN_MAX_BATCH || 400);
-// كود ميتا لما المستخدم يتخطى حد الرسايل التسويقية اليومية.
-// دي مش فشل — بنأجلها لبكرة.
+// Meta codes for "user exceeded daily marketing limit" — defer, don't fail
 const RATE_LIMIT_CODES = ["131049", "131056"];
 const MAX_ATTEMPTS = 3;
 
 const daysAgo = (n) => new Date(Date.now() - n * 24 * 60 * 60 * 1000);
 
-// ==========================================
-// الأهلية
-// ==========================================
-
-/**
- * بيرجع كل العملاء بالحقول اللي بنحتاجها للفلترة.
- * الحجم صغير فبنفلتر في الذاكرة — أوضح من استعلامات معقدة.
- */
-async function loadLeads() {
+async function loadLeads(workspaceId) {
   return prisma.lead.findMany({
+    where: { workspaceId },
     select: {
       id: true,
       name: true,
@@ -45,30 +36,24 @@ async function loadLeads() {
   });
 }
 
-/** إحصائيات قاعدة العملاء — للاستكشاف قبل إنشاء أي حملة */
-async function getAudienceStats() {
-  const leads = await loadLeads();
-
+async function getAudienceStats(workspaceId) {
+  const leads = await loadLeads(workspaceId);
   const optedOut = leads.filter((l) => l.optedOutAt).length;
   const noPhone = leads.filter((l) => !l.optedOutAt && !l.phone).length;
   const reachable = leads.filter((l) => !l.optedOutAt && l.phone);
 
-  // بعتوا خلال
   const activeWithin = (days) => {
     const cutoff = daysAgo(days);
     return reachable.filter((l) => l.lastInboundAt && l.lastInboundAt >= cutoff).length;
   };
-  // آخر رسالة منهم أقدم من
   const activeBefore = (days) => {
     const cutoff = daysAgo(days);
     return reachable.filter((l) => l.lastInboundAt && l.lastInboundAt < cutoff).length;
   };
-  // اتضافوا خلال
   const addedWithin = (days) => {
     const cutoff = daysAgo(days);
     return reachable.filter((l) => l.createdAt >= cutoff).length;
   };
-  // موجودين في السيستم من أكتر من
   const addedBefore = (days) => {
     const cutoff = daysAgo(days);
     return reachable.filter((l) => l.createdAt < cutoff).length;
@@ -76,7 +61,6 @@ async function getAudienceStats() {
 
   const byStatus = {};
   for (const l of reachable) byStatus[l.status] = (byStatus[l.status] || 0) + 1;
-
   const bySource = {};
   for (const l of reachable)
     bySource[l.source || "UNKNOWN"] = (bySource[l.source || "UNKNOWN"] || 0) + 1;
@@ -86,32 +70,15 @@ async function getAudienceStats() {
     optedOut,
     noPhone,
     reachable: reachable.length,
-
-    // اتضافوا للسيستم — الجداد
-    added: {
-      d1: addedWithin(1),
-      d7: addedWithin(7),
-      d30: addedWithin(30),
-    },
-    // موجودين من زمان — القدامى
-    inSystem: {
-      m3: addedBefore(90),
-      m6: addedBefore(180),
-      y1: addedBefore(365),
-    },
-    // بعتولنا — النشطين
+    added: { d1: addedWithin(1), d7: addedWithin(7), d30: addedWithin(30) },
+    inSystem: { m3: addedBefore(90), m6: addedBefore(180), y1: addedBefore(365) },
     activity: {
       d7: activeWithin(7),
       d30: activeWithin(30),
       d60: activeWithin(60),
       never: reachable.filter((l) => !l.lastInboundAt).length,
     },
-    // نايمين — بعتوا زمان وسكتوا
-    dormant: {
-      m3: activeBefore(90),
-      m6: activeBefore(180),
-    },
-
+    dormant: { m3: activeBefore(90), m6: activeBefore(180) },
     byStatus,
     bySource,
     recentlyMarketed: reachable.filter((l) => l.lastMarketingAt && l.lastMarketingAt >= daysAgo(7))
@@ -119,7 +86,6 @@ async function getAudienceStats() {
   };
 }
 
-/** بيتأكد إن الرقم صالح كفلتر أيام، وبيرجع null لو الخانة فاضية */
 function parseDaysFilter(value, label) {
   if (value === undefined || value === null || value === "") return null;
   const n = Number(value);
@@ -132,19 +98,6 @@ function parseDaysFilter(value, label) {
   return n;
 }
 
-/**
- * بيطبّق الفلاتر على قاعدة العملاء.
- *
- * المبدأ: الأساس هو **كل** العملاء. كل فلتر بيضيّق الدايرة، ومحدش
- * بيوسّعها. لو مفيش أي فلتر متحدد، الجمهور = كل حد يوصله رسالة.
- *
- * الترتيب مقصود عشان القمع يبقى مقروء:
- *   1. مش قابلين للوصول أصلاً (إيقاف · مفيش رقم)
- *   2. التضييق اللي المستخدم اختاره
- *   3. الحماية (فترة التهدئة) — دايماً آخر حاجة، ومش اختيارية
- *
- * بيرجع { eligible, funnel } — والـ funnel بيقول كل خطوة شالت كام وليه.
- */
 function filterEligible(leads, filters) {
   const {
     addedWithinDays = null,
@@ -158,13 +111,12 @@ function filterEligible(leads, filters) {
 
   const funnel = [];
   let pool = leads;
-
   const step = (key, label, kind, predicate) => {
     const kept = pool.filter(predicate);
     funnel.push({
       key,
       label,
-      kind, // "block" = حماية مش اختيارية · "filter" = تضييق اختاره المستخدم
+      kind, // "block" = non-optional protection · "filter" = user-chosen narrowing
       in: pool.length,
       removed: pool.length - kept.length,
       out: kept.length,
@@ -172,11 +124,11 @@ function filterEligible(leads, filters) {
     pool = kept;
   };
 
-  // ---------- 1. مش قابلين للوصول ----------
+  // 1. Unreachable
   step("optedOut", "Opted out", "block", (l) => !l.optedOutAt);
   step("noPhone", "No phone number", "block", (l) => Boolean(l.phone));
 
-  // ---------- 2. التضييق ----------
+  // 2. Narrowing
   if (addedWithinDays) {
     const cutoff = daysAgo(addedWithinDays);
     step(
@@ -186,7 +138,6 @@ function filterEligible(leads, filters) {
       (l) => l.createdAt >= cutoff
     );
   }
-
   if (addedBeforeDays) {
     const cutoff = daysAgo(addedBeforeDays);
     step(
@@ -196,7 +147,6 @@ function filterEligible(leads, filters) {
       (l) => l.createdAt < cutoff
     );
   }
-
   if (activeWithinDays) {
     const cutoff = daysAgo(activeWithinDays);
     step(
@@ -206,11 +156,8 @@ function filterEligible(leads, filters) {
       (l) => l.lastInboundAt && l.lastInboundAt >= cutoff
     );
   }
-
   if (activeBeforeDays) {
     const cutoff = daysAgo(activeBeforeDays);
-    // ملحوظة: اللي عمره ما بعت مش داخل هنا. "آخر رسالة منه بقالها 3 شهور"
-    // معناها إنه بعت فعلاً وسكت. اللي عمره ما بعت جمهور تاني خالص.
     step(
       "activeBefore",
       `Last message older than ${activeBeforeDays} day(s)`,
@@ -218,16 +165,14 @@ function filterEligible(leads, filters) {
       (l) => l.lastInboundAt && l.lastInboundAt < cutoff
     );
   }
-
   if (audienceSource) {
     step("source", `Source: ${audienceSource}`, "filter", (l) => l.source === audienceSource);
   }
-
   if (audienceStatus) {
     step("status", `Status: ${audienceStatus}`, "filter", (l) => l.status === audienceStatus);
   }
 
-  // ---------- 3. الحماية ----------
+  // 3. Protection (always last, never optional)
   const cooldownCutoff = daysAgo(cooldownDays);
   step(
     "cooldown",
@@ -239,7 +184,6 @@ function filterEligible(leads, filters) {
   return { eligible: pool, funnel };
 }
 
-/** بيدوّر على الخطوة اللي فضّت الجمهور، عشان الرسالة تقول السبب مش "مفيش حد" */
 function findEmptyingStep(funnel) {
   for (let i = funnel.length - 1; i >= 0; i--) {
     if (funnel[i].out === 0 && funnel[i].in > 0) return funnel[i];
@@ -247,11 +191,7 @@ function findEmptyingStep(funnel) {
   return null;
 }
 
-// ==========================================
-// إنشاء الحملة
-// ==========================================
-
-async function createCampaign(input) {
+async function createCampaign(input, workspaceId) {
   const {
     name,
     templateName,
@@ -262,14 +202,11 @@ async function createCampaign(input) {
     cooldownDays = DEFAULT_COOLDOWN_DAYS,
     createdById = null,
     createdByName = null,
-    // رابط الملف بتاع هيدر القالب (مرفق الديسكورد أو أي رابط عام)
     headerMediaUrl = null,
-    // توافق مع الشكل القديم: audienceDays كان "بعتوا خلال كذا يوم"، و 0 كان "الكل"
     audienceDays = null,
   } = input;
 
   if (!name || !templateName) throw new Error("Campaign name and template are required");
-
   if (cooldownDays < MIN_COOLDOWN_DAYS) {
     throw new Error(`Cooldown must be at least ${MIN_COOLDOWN_DAYS} days`);
   }
@@ -278,13 +215,10 @@ async function createCampaign(input) {
   const addedBeforeDays = parseDaysFilter(input.addedBeforeDays, "In system for more than");
   let activeWithinDays = parseDaysFilter(input.activeWithinDays, "Messaged within");
   const activeBeforeDays = parseDaysFilter(input.activeBeforeDays, "Last message older than");
-
-  // الشكل القديم بيتحول للجديد. audienceDays = 0 كان معناه "الكل" = مفيش فلتر.
   if (!activeWithinDays && audienceDays) {
     activeWithinDays = parseDaysFilter(audienceDays, "Messaged within");
   }
 
-  // تركيبات مستحيلة — أحسن نمسكها هنا من إن الجمهور يطلع صفر ومحدش يفهم ليه
   if (addedWithinDays && addedBeforeDays && addedWithinDays <= addedBeforeDays) {
     throw new Error(
       `Impossible audience: cannot be added within ${addedWithinDays} days and older than ${addedBeforeDays} days at the same time`
@@ -306,48 +240,39 @@ async function createCampaign(input) {
     cooldownDays,
   };
 
-  // ---------- التحقق من القالب قبل أي حاجة ----------
-  // من غير الفحص ده الحملة بتتعمل وتفشل وقت الإرسال بكود 132012،
-  // وساعتها الأرقام بتبقى اتحرقت في محاولات فاشلة والمديرة مش فاهمة ليه.
+  // Validate the template BEFORE anything else — otherwise the campaign fails
+  // at send time with 132012 and the numbers are burned on failed attempts.
   const templates = await getTemplates();
   const tpl = templates.find((t) => t.name === templateName && t.language === templateLanguage);
-
   if (!tpl) {
     throw new Error(
       `Template "${templateName}" (${templateLanguage}) was not found among your approved templates`
     );
   }
-
   if (tpl.variableCount !== variables.length) {
     throw new Error(
       `Template "${templateName}" expects ${tpl.variableCount} variable(s) but ${variables.length} were provided`
     );
   }
-
   if (tpl.headerVariableCount > 0) {
     throw new Error(
       `Template "${templateName}" has a text header with a variable, which is not supported yet. Use a template without one.`
     );
   }
-
   if (tpl.buttonVariableCount > 0) {
     throw new Error(
       `Template "${templateName}" has a button with a dynamic URL, which is not supported yet. Use a template without one.`
     );
   }
 
-  // هيدر صورة/فيديو/ملف — لازم ملف يتبعت مع كل رسالة.
-  // الصورة اللي في المعاينة عند ميتا دي عينة المراجعة بس، مش اللي بيتبعت.
   let headerMediaId = null;
   const headerFormat = tpl.headerNeedsMedia ? tpl.headerFormat : null;
-
   if (headerFormat) {
     if (!headerMediaUrl) {
       throw new Error(
         `Template "${templateName}" has a ${headerFormat} header. Attach a file with the "image" option — the preview image in Meta is only a review sample and is not sent.`
       );
     }
-
     const limit = SIZE_LIMITS[headerFormat.toLowerCase()] || SIZE_LIMITS.image;
     const file = await downloadUrl(headerMediaUrl, limit, `header-${Date.now()}`);
     if (!file) {
@@ -355,16 +280,12 @@ async function createCampaign(input) {
         "Could not download the attached file, or it is larger than the allowed size"
       );
     }
-
-    // بنرفعه لميتا مرة واحدة ونستخدم الـ id لكل الرسايل —
-    // أضمن من رابط خارجي ممكن يقع أو ينتهي في نص الحملة.
     headerMediaId = await uploadMedia(file.blob, file.fileName, file.mimeType);
     console.log(`[Campaign] Header media uploaded: ${headerMediaId}`);
   }
 
-  const leads = await loadLeads();
+  const leads = await loadLeads(workspaceId);
   const { eligible, funnel } = filterEligible(leads, filters);
-
   if (eligible.length === 0) {
     const culprit = findEmptyingStep(funnel);
     throw new Error(
@@ -374,15 +295,11 @@ async function createCampaign(input) {
     );
   }
 
-  // الترتيب: لو الاستهداف بتاريخ الإضافة، رتّب بيه — لأن دول غالباً
-  // lastInboundAt بتاعهم null فالترتيب بالتفاعل مش هيفرّق بينهم.
   const targetingByAddedDate = Boolean(addedWithinDays || addedBeforeDays);
   const targetingByActivity = Boolean(activeWithinDays || activeBeforeDays);
-
   if (targetingByAddedDate && !targetingByActivity) {
     eligible.sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime());
   } else {
-    // الأحدث تفاعلاً الأول، وبعدين الأحدث تسجيلاً — أكتر ناس فاكرينكم يستلموا أولاً
     eligible.sort((a, b) => {
       const aTime = a.lastInboundAt?.getTime() || 0;
       const bTime = b.lastInboundAt?.getTime() || 0;
@@ -396,14 +313,11 @@ async function createCampaign(input) {
 
   const campaign = await prisma.campaign.create({
     data: {
+      workspaceId,
       name,
       templateName,
       templateLanguage,
       variables,
-      // audienceDays في الـschema Int @default(60) مش nullable.
-      // بنكتبه صراحةً بدل ما نسيبه ياخد 60 ويوصف الحملة غلط.
-      // 0 = "الكل" بالمعنى القديم، وهو اللي بيخلي describeAudience يرجّع
-      // "Everyone reachable" بدل "messaged us in the last 60 days".
       audienceDays: activeWithinDays || 0,
       addedWithinDays,
       addedBeforeDays,
@@ -419,23 +333,18 @@ async function createCampaign(input) {
       totalRecipients: batch.length,
       createdById,
       createdByName,
-      // القمع متخزن عشان المعاينة تفضل متاحة بعدين
       excludedBreakdown: funnel,
-      // القيد الفريد على (campaignId, leadId) هو اللي بيمنع الإرسال المزدوج
-      recipients: {
-        createMany: { data: batch.map((l) => ({ leadId: l.id })) },
-      },
+      // The unique (campaignId, leadId) constraint prevents double sends
+      recipients: { createMany: { data: batch.map((l) => ({ leadId: l.id })) } },
     },
   });
 
   console.log(`[Campaign] Created "${name}" with ${batch.length} recipient(s)`);
-
   return {
     campaign,
     eligible: batch.length,
     funnel,
     deferredToNextBatch,
-    // أول شريحة بالأسماء — المعاينة في الديسكورد بتعرضها فوراً
     preview: batch.slice(0, 30).map((l) => ({ name: l.name, phone: l.phone })),
     audienceLabel: describeAudience({
       addedWithinDays,
@@ -448,7 +357,6 @@ async function createCampaign(input) {
   };
 }
 
-/** وصف بشري للجمهور — بيتعرض في المعاينة وفي /campaign info */
 function describeAudience(c) {
   const parts = [];
   if (c.addedWithinDays) parts.push(`added in the last ${c.addedWithinDays} day(s)`);
@@ -457,38 +365,29 @@ function describeAudience(c) {
   if (c.activeBeforeDays) parts.push(`last message older than ${c.activeBeforeDays} day(s)`);
   if (c.audienceSource) parts.push(`source: ${c.audienceSource}`);
   if (c.audienceStatus) parts.push(`status: ${c.audienceStatus}`);
-
-  // توافق مع الحملات القديمة
   if (parts.length === 0 && c.audienceDays) {
     parts.push(`messaged us in the last ${c.audienceDays} day(s)`);
   }
-
   return parts.length ? parts.join(" · ") : "Everyone reachable";
 }
 
-// ==========================================
-// التشغيل والإيقاف
-// ==========================================
-
-async function startCampaign(campaignId) {
-  const campaign = await prisma.campaign.findUnique({ where: { id: campaignId } });
+async function startCampaign(workspaceId, campaignId) {
+  const campaign = await prisma.campaign.findFirst({ where: { id: campaignId, workspaceId } });
   if (!campaign) throw new Error("Campaign not found");
   if (campaign.status === "RUNNING") throw new Error("Campaign is already running");
   if (campaign.status === "DONE") throw new Error("Campaign has already finished");
-
   const updated = await prisma.campaign.update({
     where: { id: campaignId },
     data: { status: "RUNNING", startedAt: campaign.startedAt || new Date() },
   });
-
   console.log(`[Campaign] Started "${campaign.name}"`);
   startEngine();
   return updated;
 }
 
-async function stopCampaign(campaignId) {
+async function stopCampaign(workspaceId, campaignId) {
   const campaign = await prisma.campaign.update({
-    where: { id: campaignId },
+    where: { id: campaignId, workspaceId },
     data: { status: "PAUSED" },
   });
   console.log(`[Campaign] Paused "${campaign.name}"`);
@@ -496,31 +395,23 @@ async function stopCampaign(campaignId) {
 }
 
 // ==========================================
-// المحرك
+// Engine (deployment-level: one WhatsApp number per deployment)
 // ==========================================
-
 let timer = null;
 let ticking = false;
 
-/**
- * بياخد مستقبِل واحد كل مرة ويبعت له.
- * التسلسل مقصود — بيمنع الدفعات المفاجئة وبيحمي الذاكرة.
- */
 async function tick() {
-  if (ticking) return; // إرسال بطيء ميعملش تراكم
+  if (ticking) return;
   ticking = true;
-
   try {
     const campaign = await prisma.campaign.findFirst({
       where: { status: "RUNNING" },
       orderBy: { startedAt: "asc" },
     });
-
     if (!campaign) {
       stopEngine();
       return;
     }
-
     const recipient = await prisma.campaignRecipient.findFirst({
       where: {
         campaignId: campaign.id,
@@ -530,8 +421,6 @@ async function tick() {
       include: { lead: true },
       orderBy: { id: "asc" },
     });
-
-    // خلصت
     if (!recipient) {
       await prisma.campaign.update({
         where: { id: campaign.id },
@@ -540,7 +429,6 @@ async function tick() {
       console.log(`[Campaign] Finished "${campaign.name}"`);
       return;
     }
-
     await sendToRecipient(campaign, recipient);
   } catch (error) {
     console.error("[Campaign] Tick failed:", error.message);
@@ -551,8 +439,6 @@ async function tick() {
 
 async function sendToRecipient(campaign, recipient) {
   const lead = recipient.lead;
-
-  // العميل ممكن يكون عمل إيقاف بعد ما الحملة اتعملت
   if (lead.optedOutAt || !lead.phone) {
     await prisma.campaignRecipient.update({
       where: { id: recipient.id },
@@ -561,8 +447,8 @@ async function sendToRecipient(campaign, recipient) {
     return;
   }
 
-  // فحص التهدئة تاني وقت الإرسال — بين المعاينة والتأكيد ممكن تكون حملة
-  // تانية بعتت للعميل ده. (الحملة دي نفسها مبتوصلش هنا مرتين بسبب القيد الفريد.)
+  // Re-check cooldown at send time — another campaign may have reached this
+  // contact between preview and confirmation.
   const cooldownCutoff = daysAgo(campaign.cooldownDays || DEFAULT_COOLDOWN_DAYS);
   if (lead.lastMarketingAt && lead.lastMarketingAt >= cooldownCutoff) {
     await prisma.campaignRecipient.update({
@@ -576,9 +462,8 @@ async function sendToRecipient(campaign, recipient) {
     return;
   }
 
-  // {name} بيتبدل باسم العميل، وأي قيمة تانية بتتبعت زي ما هي
   const values = (campaign.variables || []).map((v) =>
-    String(v).replace(/\{name\}/gi, lead.name || "there")
+    String(v).replace(/{name}/gi, lead.name || "there")
   );
 
   try {
@@ -593,7 +478,6 @@ async function sendToRecipient(campaign, recipient) {
         variableNames: campaign.templateVariableNames || null,
       }
     );
-
     await prisma.$transaction([
       prisma.campaignRecipient.update({
         where: { id: recipient.id },
@@ -609,7 +493,6 @@ async function sendToRecipient(campaign, recipient) {
         where: { id: campaign.id },
         data: { sentCount: { increment: 1 } },
       }),
-      // بيتحسب مسبقاً عشان فلتر التهدئة يبقى سريع
       prisma.lead.update({
         where: { id: lead.id },
         data: { lastMarketingAt: new Date() },
@@ -626,9 +509,7 @@ async function sendToRecipient(campaign, recipient) {
     ]);
   } catch (error) {
     const message = String(error.message || error);
-    // تخطى حد ميتا اليومي للمستخدم — نأجله بدل ما نعتبره فشل
     const isRateLimit = RATE_LIMIT_CODES.some((code) => message.includes(code));
-
     await prisma.campaignRecipient.update({
       where: { id: recipient.id },
       data: {
@@ -637,14 +518,12 @@ async function sendToRecipient(campaign, recipient) {
         attempts: { increment: 1 },
       },
     });
-
     if (!isRateLimit) {
       await prisma.campaign.update({
         where: { id: campaign.id },
         data: { failedCount: { increment: 1 } },
       });
     }
-
     console.error(`[Campaign] Send failed for ${lead.phone}: ${message.slice(0, 120)}`);
   }
 }
@@ -663,7 +542,6 @@ function stopEngine() {
   console.log("[Campaign] Engine idle");
 }
 
-/** بيتنده عند إقلاع السيرفر — أي حملة كانت شغالة بتكمّل من حيث وقفت */
 async function resumeRunningCampaigns() {
   const count = await prisma.campaign.count({ where: { status: "RUNNING" } });
   if (count > 0) {
@@ -673,17 +551,16 @@ async function resumeRunningCampaigns() {
 }
 
 // ==========================================
-// الاستعلامات
+// Queries (workspace-scoped)
 // ==========================================
 
-/**
- * قايمة المستقبلين بالأسماء والأرقام — دي اللي المديرة بتراجعها قبل التأكيد.
- * من غيرها هي بتضغط إرسال وهي شايفة رقم مجرد بس.
- */
-async function getCampaignRecipients(campaignId, { limit = null, status = null } = {}) {
-  const campaign = await prisma.campaign.findUnique({ where: { id: campaignId } });
+async function getCampaignRecipients(
+  workspaceId,
+  campaignId,
+  { limit = null, status = null } = {}
+) {
+  const campaign = await prisma.campaign.findFirst({ where: { id: campaignId, workspaceId } });
   if (!campaign) throw new Error("Campaign not found");
-
   const recipients = await prisma.campaignRecipient.findMany({
     where: { campaignId, ...(status ? { status } : {}) },
     include: {
@@ -692,7 +569,6 @@ async function getCampaignRecipients(campaignId, { limit = null, status = null }
     orderBy: { id: "asc" },
     ...(limit ? { take: limit } : {}),
   });
-
   return {
     campaignId,
     campaignName: campaign.name,
@@ -709,23 +585,19 @@ async function getCampaignRecipients(campaignId, { limit = null, status = null }
   };
 }
 
-async function getCampaignProgress(campaignId) {
-  const campaign = await prisma.campaign.findUnique({ where: { id: campaignId } });
+async function getCampaignProgress(workspaceId, campaignId) {
+  const campaign = await prisma.campaign.findFirst({ where: { id: campaignId, workspaceId } });
   if (!campaign) throw new Error("Campaign not found");
-
   const counts = await prisma.campaignRecipient.groupBy({
     by: ["status"],
     where: { campaignId },
     _count: true,
   });
-
   const byStatus = {};
   for (const c of counts) byStatus[c.status] = c._count;
-
   const sent = byStatus.SENT || 0;
   const remaining = (byStatus.PENDING || 0) + (byStatus.DEFERRED || 0);
   const etaMinutes = Math.ceil((remaining * SEND_INTERVAL_MS) / 60000);
-
   return {
     id: campaign.id,
     name: campaign.name,
@@ -740,26 +612,24 @@ async function getCampaignProgress(campaignId) {
   };
 }
 
-/** بيعد الردود اللي جت بعد بدء الحملة — ده مقياس النجاح الحقيقي */
+// Counts replies that arrived after the campaign started — the real success metric
 async function countReplies(campaign) {
   if (!campaign.startedAt) return 0;
   return prisma.interaction.count({
     where: {
       origin: "CUSTOMER",
       createdAt: { gte: campaign.startedAt },
-      lead: {
-        campaignRecipients: { some: { campaignId: campaign.id, status: "SENT" } },
-      },
+      lead: { campaignRecipients: { some: { campaignId: campaign.id, status: "SENT" } } },
     },
   });
 }
 
-async function listCampaigns(limit = 10) {
+async function listCampaigns(workspaceId, limit = 10) {
   const campaigns = await prisma.campaign.findMany({
+    where: { workspaceId },
     orderBy: { createdAt: "desc" },
     take: limit,
   });
-
   return Promise.all(
     campaigns.map(async (c) => ({
       id: c.id,
@@ -775,19 +645,16 @@ async function listCampaigns(limit = 10) {
   );
 }
 
-async function getCampaignInfo(campaignId) {
-  const campaign = await prisma.campaign.findUnique({ where: { id: campaignId } });
+async function getCampaignInfo(workspaceId, campaignId) {
+  const campaign = await prisma.campaign.findFirst({ where: { id: campaignId, workspaceId } });
   if (!campaign) throw new Error("Campaign not found");
-
-  const progress = await getCampaignProgress(campaignId);
+  const progress = await getCampaignProgress(workspaceId, campaignId);
   const replies = await countReplies(campaign);
-
   const failures = await prisma.campaignRecipient.findMany({
     where: { campaignId, status: "FAILED" },
     include: { lead: { select: { name: true, phone: true } } },
     take: 5,
   });
-
   return {
     ...progress,
     replies,
@@ -812,10 +679,12 @@ async function getCampaignInfo(campaignId) {
   };
 }
 
-/** حملات بحالة معينة — للـ autocomplete في البوت */
-async function findCampaigns(statuses = null, limit = 25) {
+async function findCampaigns(workspaceId, statuses = null, limit = 25) {
   return prisma.campaign.findMany({
-    where: statuses ? { status: { in: statuses } } : undefined,
+    where: {
+      workspaceId,
+      ...(statuses ? { status: { in: statuses } } : {}),
+    },
     orderBy: { createdAt: "desc" },
     take: limit,
     select: { id: true, name: true, status: true },

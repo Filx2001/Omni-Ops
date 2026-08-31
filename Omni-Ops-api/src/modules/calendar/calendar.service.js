@@ -1,89 +1,28 @@
 const prisma = require("../../prisma");
+const crypto = require("crypto");
 const {
   addEventToGoogle,
   deleteEventFromGoogle,
   deleteGoogleEventsByIds,
   syncEmailsToGoogle,
-} = require("../../utils/googleCalendar");
-const {
-  syncClassToAccountingSheet,
-  syncEventToAccountingSheet,
-  removeRecordFromAccountingSheet,
-  backfillAccountingSheet,
-} = require("../../utils/accountingSheets");
-const crypto = require("crypto");
+} = require("../../integrations/googleCalendar");
+const accounting = require("../../integrations/accountingSheets");
+// Phase 7 will rename syncClassToAccountingSheet — accept either for now
+const syncAppointmentToAccountingSheet =
+  accounting.syncAppointmentToAccountingSheet || accounting.syncClassToAccountingSheet;
+const { syncEventToAccountingSheet, removeRecordFromAccountingSheet, backfillAccountingSheet } =
+  accounting;
+const { zonedDate, dateStrInTz, weekdayInTz } = require("../../utils/timezone");
 
-// اسم بديل للحصة لو الـ subject مكتبش — بيدي معلومة مفيدة بدل رقم
-function classLabel(cls) {
-  if (cls.subject) return cls.subject;
-  const teacher = cls.teacher?.name || "TBA";
-  const d = new Date(cls.startTime);
-  const date = `${d.getDate()}/${d.getMonth() + 1}`;
-  return `${teacher} Class - ${date}`;
+// Fallback label when an appointment has no title
+function appointmentLabel(appt) {
+  if (appt.title) return appt.title;
+  const assignee = appt.assignee?.name || "TBA";
+  const d = new Date(appt.startTime);
+  return `${assignee} Appointment - ${d.getDate()}/${d.getMonth() + 1}`;
 }
 
-// ========================== Events Services ==========================
-
-async function createEvent(data, options = {}) {
-  const { assigneeIds = [], ...eventData } = data;
-  const newEvent = await prisma.schoolEvent.create({
-    data: {
-      ...eventData,
-      ...(assigneeIds.length ? { assignees: { connect: assigneeIds.map((id) => ({ id })) } } : {}),
-    },
-    include: { createdBy: true, assignees: true },
-  });
-
-  const validEmails =
-    newEvent.assignees?.map((emp) => emp.email).filter((email) => email && email.includes("@")) ||
-    [];
-  const assigneeNames = newEvent.assignees?.map((emp) => emp.name).join(", ");
-  const eventTitle = assigneeNames ? `${assigneeNames} - ${newEvent.title}` : newEvent.title;
-
-  const googleEventId = await addEventToGoogle({
-    title: eventTitle,
-    description: newEvent.description,
-    startDate: newEvent.startDate,
-    endDate: newEvent.endDate,
-    isAllDay: newEvent.isAllDay,
-    targetEmails: validEmails,
-  });
-
-  if (!googleEventId?.id) {
-    await prisma.schoolEvent.delete({ where: { id: newEvent.id } });
-    throw new Error("Failed to connect to Google Calendar.");
-  }
-  // 💾 تخزين معرفات جوجل للمسح الدقيق لاحقًا
-  const withIds = await prisma.schoolEvent.update({
-    where: { id: newEvent.id },
-    data: { googleEventIds: googleEventId.inserted },
-    include: { createdBy: true, assignees: true },
-  });
-  Object.assign(newEvent, withIds);
-  if (!options.skipSheet) {
-    syncEventToAccountingSheet(newEvent).catch((err) =>
-      console.error("Accounting Sheet Error:", err)
-    );
-  }
-  return newEvent;
-}
-
-async function createEventsBulk(data) {
-  const { events = [] } = data;
-  if (!events.length) throw new Error("No events provided.");
-  const groupId = data.groupId || crypto.randomUUID();
-  const created = [];
-  for (const item of events) {
-    created.push(await createEvent({ ...item, groupId }, { skipSheet: true }));
-  }
-  // 📊 مزامنة واحدة مجمعة بدل 26 مزامنة متوازية (عشان rate limit بتاع جوجل)
-  backfillAccountingSheet([], created).catch((err) =>
-    console.error("Accounting Sheet Bulk Error:", err)
-  );
-  return { groupId, created };
-}
-
-// 🕐 بيفك "10am" / "10:30 pm" / "14:00" لساعات ودقايق
+// "10am" / "10:30 pm" / "14:00" → { h, m }
 function parseTimeParts(t) {
   const s = String(t).trim().toLowerCase();
   const isPM = s.includes("pm");
@@ -97,50 +36,110 @@ function parseTimeParts(t) {
   return { h, m };
 }
 
-// 📅 بيبني Date جديد: نفس يوم الفعالية (بتوقيت قطر) + الوقت الجديد
-function buildQatarDateTime(baseDate, timeParts) {
-  const p = new Date(baseDate).toLocaleDateString("en-GB", { timeZone: "Asia/Qatar" }).split("/"); // ["dd","mm","yyyy"]
-  const hh = String(timeParts.h).padStart(2, "0");
-  const mm = String(timeParts.m).padStart(2, "0");
-  return new Date(`${p[2]}-${p[1]}-${p[0]}T${hh}:${mm}:00+03:00`);
+// Same day as baseDate (in the workspace timezone) + a new wall-clock time
+function buildZonedDateTime(baseDate, timeParts, timeZone) {
+  const dateStr = dateStrInTz(new Date(baseDate), timeZone);
+  return zonedDate(dateStr, timeParts.h, timeParts.m, timeZone);
 }
 
-// 🌟 تحديث التعديل ليدعم تواريخ محددة
-async function updateEvent(id, data, scope = "single") {
-  const targetEvent = await prisma.schoolEvent.findUnique({
-    where: { id },
+// "d/m/yyyy" key of an instant in the workspace timezone (for scope=date matching)
+function dayKey(date, timeZone) {
+  const [y, m, d] = dateStrInTz(new Date(date), timeZone).split("-").map(Number);
+  return `${d}/${m}/${y}`;
+}
+
+// ══════════════════════════ EVENTS ══════════════════════════
+
+async function createEvent(workspace, data, options = {}) {
+  const { assigneeIds = [], ...eventData } = data;
+  const newEvent = await prisma.event.create({
+    data: {
+      ...eventData,
+      workspaceId: workspace.id,
+      ...(assigneeIds.length ? { assignees: { connect: assigneeIds.map((id) => ({ id })) } } : {}),
+    },
+    include: { createdBy: true, assignees: true },
+  });
+
+  const validEmails =
+    newEvent.assignees?.map((emp) => emp.email).filter((email) => email && email.includes("@")) ||
+    [];
+  const assigneeNames = newEvent.assignees?.map((emp) => emp.name).join(", ");
+  const eventTitle = assigneeNames ? `${assigneeNames} - ${newEvent.title}` : newEvent.title;
+
+  try {
+    const googleEventId = await addEventToGoogle({
+      title: eventTitle,
+      description: newEvent.description,
+      startDate: newEvent.startDate,
+      endDate: newEvent.endDate,
+      isAllDay: newEvent.isAllDay,
+      targetEmails: validEmails,
+    });
+    if (googleEventId?.id) {
+      const withIds = await prisma.event.update({
+        where: { id: newEvent.id },
+        data: { externalCalendarIds: googleEventId.inserted },
+        include: { createdBy: true, assignees: true },
+      });
+      Object.assign(newEvent, withIds);
+    }
+  } catch (err) {
+    console.error("[Google] Event sync failed:", err.message);
+  }
+
+  if (!options.skipSheet) {
+    syncEventToAccountingSheet(newEvent).catch((err) =>
+      console.error("Accounting Sheet Error:", err)
+    );
+  }
+  return newEvent;
+}
+
+async function createEventsBulk(workspace, data) {
+  const { events = [] } = data;
+  if (!events.length) throw new Error("No events provided.");
+  const groupId = data.groupId || crypto.randomUUID();
+  const created = [];
+  for (const item of events) {
+    created.push(await createEvent(workspace, { ...item, groupId }, { skipSheet: true }));
+  }
+  // One batched sheet sync instead of N parallel ones (Google rate limits)
+  backfillAccountingSheet([], created).catch((err) =>
+    console.error("Accounting Sheet Bulk Error:", err)
+  );
+  return { groupId, created };
+}
+
+async function updateEvent(workspace, id, data, scope = "single") {
+  const tz = workspace.timezone || "UTC";
+  const targetEvent = await prisma.event.findFirst({
+    where: { id, workspaceId: workspace.id },
     include: { assignees: true },
   });
   if (!targetEvent) throw new Error("Event not found");
 
   let eventsToUpdate = [];
   if (scope === "series" && targetEvent.groupId) {
-    eventsToUpdate = await prisma.schoolEvent.findMany({
+    eventsToUpdate = await prisma.event.findMany({
       where: { groupId: targetEvent.groupId },
       include: { assignees: true },
     });
   } else if (scope === "single" || !scope) {
     eventsToUpdate = [targetEvent];
   } else {
-    // scope = تواريخ محددة زي "10/7/2026,11/7/2026"
+    // scope = explicit dates like "10/7/2026,11/7/2026"
     if (!targetEvent.groupId) {
       throw new Error(
         "This event is not a day-series. Day-level operations only work on events created with the 'dates' option."
       );
     }
     const targetDates = scope.split(",");
-    const allSeries = await prisma.schoolEvent.findMany({
+    const allSeries = await prisma.event.findMany({
       where: { groupId: targetEvent.groupId },
       include: { assignees: true },
     });
-    eventsToUpdate = allSeries.filter((e) => {
-      // مقارنة بتوقيت قطر مش توقيت السيرفر
-      const parts = new Date(e.startDate)
-        .toLocaleDateString("en-GB", { timeZone: "Asia/Qatar" })
-        .split("/");
-      const edStr = `${Number(parts[0])}/${Number(parts[1])}/${Number(parts[2])}`;
-      return targetDates.includes(edStr);
-    });
+    eventsToUpdate = allSeries.filter((e) => targetDates.includes(dayKey(e.startDate, tz)));
     if (eventsToUpdate.length === 0) {
       throw new Error("None of the specified dates were found in this event series.");
     }
@@ -155,10 +154,10 @@ async function updateEvent(id, data, scope = "single") {
     const oldAssigneeNames = ev.assignees?.map((emp) => emp.name).join(", ");
     const oldEventTitle = oldAssigneeNames ? `${oldAssigneeNames} - ${ev.title}` : ev.title;
 
-    if (ev.googleEventIds) {
-      await deleteGoogleEventsByIds(ev.googleEventIds);
+    if (ev.externalCalendarIds) {
+      await deleteGoogleEventsByIds(ev.externalCalendarIds).catch(() => {});
     } else {
-      // فعاليات قديمة من غير معرفات مخزنة — الطريقة القديمة كخطة بديلة
+      // Legacy events without stored ids — fall back to title matching
       try {
         await deleteEventFromGoogle({
           title: oldEventTitle,
@@ -169,17 +168,16 @@ async function updateEvent(id, data, scope = "single") {
     }
 
     let dayData = { ...baseData };
-    // startTime/endTime مش حقول في الموديل — بنحولهم لـ startDate/endDate وبنشيلهم
+    // startTime/endTime are not model fields — convert to startDate/endDate, then drop them
     delete dayData.startTime;
     delete dayData.endTime;
-
     if (baseData.startTime) {
       const t = parseTimeParts(baseData.startTime);
       if (!t)
         throw new Error(
           `Invalid start time format: "${baseData.startTime}". Use e.g. "10am" or "14:30".`
         );
-      dayData.startDate = buildQatarDateTime(ev.startDate, t);
+      dayData.startDate = buildZonedDateTime(ev.startDate, t, tz);
       dayData.isAllDay = false;
     }
     if (baseData.endTime) {
@@ -188,13 +186,13 @@ async function updateEvent(id, data, scope = "single") {
         throw new Error(
           `Invalid end time format: "${baseData.endTime}". Use e.g. "11am" or "15:30".`
         );
-      dayData.endDate = buildQatarDateTime(ev.endDate, t);
+      dayData.endDate = buildZonedDateTime(ev.endDate, t, tz);
     }
     if (dayData.startDate && dayData.endDate && dayData.endDate <= dayData.startDate) {
       throw new Error("End time must be after start time.");
     }
 
-    const updated = await prisma.schoolEvent.update({
+    const updated = await prisma.event.update({
       where: { id: ev.id },
       data: {
         ...dayData,
@@ -221,9 +219,9 @@ async function updateEvent(id, data, scope = "single") {
         targetEmails: newEmails,
       });
       if (reAdded?.id) {
-        await prisma.schoolEvent.update({
+        await prisma.event.update({
           where: { id: updated.id },
-          data: { googleEventIds: reAdded.inserted },
+          data: { externalCalendarIds: reAdded.inserted },
         });
       }
     } catch (err) {}
@@ -234,42 +232,34 @@ async function updateEvent(id, data, scope = "single") {
   return { events: updatedEvents, count: updatedEvents.length };
 }
 
-// 🌟 تحديث الحذف ليدعم تواريخ محددة
-async function deleteEvent(id, scope = "single") {
-  const targetEvent = await prisma.schoolEvent.findUnique({
-    where: { id },
+async function deleteEvent(workspace, id, scope = "single") {
+  const tz = workspace.timezone || "UTC";
+  const targetEvent = await prisma.event.findFirst({
+    where: { id, workspaceId: workspace.id },
     include: { assignees: true },
   });
   if (!targetEvent) throw new Error("Event not found");
 
   let eventsToDelete = [];
   if (scope === "series" && targetEvent.groupId) {
-    eventsToDelete = await prisma.schoolEvent.findMany({
+    eventsToDelete = await prisma.event.findMany({
       where: { groupId: targetEvent.groupId },
       include: { assignees: true },
     });
   } else if (scope === "single" || !scope) {
     eventsToDelete = [targetEvent];
   } else {
-    // scope = تواريخ محددة زي "10/7/2026,11/7/2026"
     if (!targetEvent.groupId) {
       throw new Error(
         "This event is not a day-series. Day-level operations only work on events created with the 'dates' option."
       );
     }
     const targetDates = scope.split(",");
-    const allSeries = await prisma.schoolEvent.findMany({
+    const allSeries = await prisma.event.findMany({
       where: { groupId: targetEvent.groupId },
       include: { assignees: true },
     });
-    eventsToDelete = allSeries.filter((e) => {
-      // مقارنة بتوقيت قطر مش توقيت السيرفر
-      const parts = new Date(e.startDate)
-        .toLocaleDateString("en-GB", { timeZone: "Asia/Qatar" })
-        .split("/");
-      const edStr = `${Number(parts[0])}/${Number(parts[1])}/${Number(parts[2])}`;
-      return targetDates.includes(edStr);
-    });
+    eventsToDelete = allSeries.filter((e) => targetDates.includes(dayKey(e.startDate, tz)));
     if (eventsToDelete.length === 0) {
       throw new Error("None of the specified dates were found in this event series.");
     }
@@ -281,10 +271,9 @@ async function deleteEvent(id, scope = "single") {
     const assigneeNames = ev.assignees?.map((emp) => emp.name).join(", ");
     const eventTitle = assigneeNames ? `${assigneeNames} - ${ev.title}` : ev.title;
 
-    if (ev.googleEventIds) {
-      await deleteGoogleEventsByIds(ev.googleEventIds);
+    if (ev.externalCalendarIds) {
+      await deleteGoogleEventsByIds(ev.externalCalendarIds).catch(() => {});
     } else {
-      // فعاليات قديمة من غير معرفات مخزنة — الطريقة القديمة كخطة بديلة
       try {
         await deleteEventFromGoogle({
           title: eventTitle,
@@ -294,144 +283,141 @@ async function deleteEvent(id, scope = "single") {
       } catch (err) {}
     }
 
-    await prisma.schoolEvent.delete({ where: { id: ev.id } });
+    await prisma.event.delete({ where: { id: ev.id } });
     removeRecordFromAccountingSheet(ev.id).catch((err) => console.error("Sheet Error:", err));
   }
   return { events: eventsToDelete, count: eventsToDelete.length };
 }
 
-async function getEvents() {
-  return prisma.schoolEvent.findMany({
+async function getEvents(workspace) {
+  return prisma.event.findMany({
+    where: { workspaceId: workspace.id },
     orderBy: { startDate: "asc" },
     include: { createdBy: true, assignees: true },
   });
 }
 
-// ========================== Classes Services ==========================
-async function createClass(data) {
-  // اليوم بيتحسب من التاريخ لو المستخدم مكتبوش
+// ══════════════════════════ APPOINTMENTS ══════════════════════════
+
+async function createAppointment(workspace, data) {
+  // Derive the weekday from the date when the caller didn't provide one
   if (!data.day && data.startTime) {
-    data.day = new Date(data.startTime).toLocaleDateString("en-US", {
-      weekday: "long",
-      timeZone: "Asia/Qatar",
-    });
+    data.day = weekdayInTz(new Date(data.startTime), workspace.timezone || "UTC");
   }
-
-  const newClass = await prisma.schoolClass.create({
-    data,
-    include: { teacher: true, createdBy: true },
+  const newAppointment = await prisma.appointment.create({
+    data: { ...data, workspaceId: workspace.id },
+    include: { assignee: true, createdBy: true },
   });
 
-  const label = classLabel(newClass);
+  const label = appointmentLabel(newAppointment);
   const validEmails =
-    newClass.teacher?.email && newClass.teacher.email.includes("@") ? [newClass.teacher.email] : [];
-
-  const googleEventId = await addEventToGoogle({
-    title: `${newClass.teacher?.name || "TBA"} - 📘 Class: ${label}`,
-    description: `👨‍🏫 Teacher: ${newClass.teacher?.name || "TBA"}\n🏫 Room: ${newClass.room || "TBA"}\n📅 Day: ${newClass.day || "-"}`,
-    startDate: newClass.startTime,
-    endDate: newClass.endTime,
-    isAllDay: newClass.isAllDay, // حصة بلا وقت بتبقى حدث طوال اليوم
-    targetEmails: validEmails,
-  });
-
-  if (!googleEventId) {
-    await prisma.schoolClass.delete({ where: { id: newClass.id } });
-    throw new Error("Failed to connect to Google Calendar.");
-  }
-
-  syncClassToAccountingSheet(newClass).catch((err) =>
-    console.error("[Accounting] Class sync failed:", err.message)
-  );
-  return newClass;
-}
-async function updateClass(id, data) {
-  const oldClass = await prisma.schoolClass.findUnique({
-    where: { id },
-    include: { teacher: true },
-  });
-
-  if (oldClass) {
-    const oldEmails = oldClass.teacher?.email ? [oldClass.teacher.email] : [];
-    await deleteEventFromGoogle({
-      title: `${oldClass.teacher?.name || "TBA"} - 📘 Class: ${classLabel(oldClass)}`,
-      startDate: oldClass.startTime,
-      targetEmails: oldEmails,
-    });
-  }
-
-  // لو التاريخ اتغير من غير ما اليوم يتحدد، نحسبه من الجديد
-  if (data.startTime && !data.day) {
-    data.day = new Date(data.startTime).toLocaleDateString("en-US", {
-      weekday: "long",
-      timeZone: "Asia/Qatar",
-    });
-  }
-
-  const updatedClass = await prisma.schoolClass.update({
-    where: { id },
-    data,
-    include: { teacher: true, createdBy: true },
-  });
-
-  const label = classLabel(updatedClass);
-  const validEmails =
-    updatedClass.teacher?.email && updatedClass.teacher.email.includes("@")
-      ? [updatedClass.teacher.email]
+    newAppointment.assignee?.email && newAppointment.assignee.email.includes("@")
+      ? [newAppointment.assignee.email]
       : [];
-
   try {
     await addEventToGoogle({
-      title: `${updatedClass.teacher?.name || "TBA"} - 📘 Class: ${label}`,
-      description: `👨‍🏫 Teacher: ${updatedClass.teacher?.name || "TBA"}\n🏫 Room: ${updatedClass.room || "TBA"}\n📅 Day: ${updatedClass.day || "-"}`,
-      startDate: updatedClass.startTime,
-      endDate: updatedClass.endTime,
-      isAllDay: updatedClass.isAllDay,
+      title: `${newAppointment.assignee?.name || "TBA"} - 📅 Appointment: ${label}`,
+      description: `👤 Assignee: ${newAppointment.assignee?.name || "TBA"}\n📍 Location: ${newAppointment.location || "TBA"}\n📅 Day: ${newAppointment.day || "-"}`,
+      startDate: newAppointment.startTime,
+      endDate: newAppointment.endTime,
+      isAllDay: newAppointment.isAllDay,
+      targetEmails: validEmails,
+    });
+  } catch (err) {
+    console.error("[Google] Appointment sync failed:", err.message);
+  }
+
+  syncAppointmentToAccountingSheet(newAppointment).catch((err) =>
+    console.error("[Accounting] Appointment sync failed:", err.message)
+  );
+  return newAppointment;
+}
+
+async function updateAppointment(workspace, id, data) {
+  const oldAppointment = await prisma.appointment.findFirst({
+    where: { id, workspaceId: workspace.id },
+    include: { assignee: true },
+  });
+  if (oldAppointment) {
+    const oldEmails = oldAppointment.assignee?.email ? [oldAppointment.assignee.email] : [];
+    try {
+      await deleteEventFromGoogle({
+        title: `${oldAppointment.assignee?.name || "TBA"} - 📅 Appointment: ${appointmentLabel(oldAppointment)}`,
+        startDate: oldAppointment.startTime,
+        targetEmails: oldEmails,
+      });
+    } catch (err) {}
+  }
+
+  if (data.startTime && !data.day) {
+    data.day = weekdayInTz(new Date(data.startTime), workspace.timezone || "UTC");
+  }
+
+  const updated = await prisma.appointment.update({
+    where: { id },
+    data,
+    include: { assignee: true, createdBy: true },
+  });
+
+  const label = appointmentLabel(updated);
+  const validEmails =
+    updated.assignee?.email && updated.assignee.email.includes("@") ? [updated.assignee.email] : [];
+  try {
+    await addEventToGoogle({
+      title: `${updated.assignee?.name || "TBA"} - 📅 Appointment: ${label}`,
+      description: `👤 Assignee: ${updated.assignee?.name || "TBA"}\n📍 Location: ${updated.location || "TBA"}\n📅 Day: ${updated.day || "-"}`,
+      startDate: updated.startTime,
+      endDate: updated.endTime,
+      isAllDay: updated.isAllDay,
       targetEmails: validEmails,
     });
   } catch (err) {}
 
-  syncClassToAccountingSheet(updatedClass).catch((err) =>
-    console.error("[Accounting] Class sync failed:", err.message)
+  syncAppointmentToAccountingSheet(updated).catch((err) =>
+    console.error("[Accounting] Appointment sync failed:", err.message)
   );
-  return updatedClass;
+  return updated;
 }
 
-async function deleteClass(id) {
-  const classRecord = await prisma.schoolClass.findUnique({
-    where: { id },
-    include: { teacher: true },
+async function deleteAppointment(workspace, id) {
+  const record = await prisma.appointment.findFirst({
+    where: { id, workspaceId: workspace.id },
+    include: { assignee: true },
   });
-  if (!classRecord) throw new Error("Class not found");
+  if (!record) throw new Error("Appointment not found");
+
   try {
-    const emails = classRecord.teacher?.email ? [classRecord.teacher.email] : [];
+    const emails = record.assignee?.email ? [record.assignee.email] : [];
     await deleteEventFromGoogle({
-      title: `${classRecord.teacher?.name || "TBA"} - 📘 Class: ${classLabel(classRecord)}`,
-      startDate: classRecord.startTime,
+      title: `${record.assignee?.name || "TBA"} - 📅 Appointment: ${appointmentLabel(record)}`,
+      startDate: record.startTime,
       targetEmails: emails,
     });
   } catch (err) {}
-  await prisma.schoolClass.delete({ where: { id } });
+
+  await prisma.appointment.delete({ where: { id } });
   removeRecordFromAccountingSheet(id).catch((err) => console.error("Sheet Error:", err));
-  return classRecord;
+  return record;
 }
 
-async function getClasses() {
-  return prisma.schoolClass.findMany({ include: { teacher: true } });
+async function getAppointments(workspace) {
+  return prisma.appointment.findMany({
+    where: { workspaceId: workspace.id },
+    include: { assignee: true },
+  });
 }
 
-// ========================== Bulk & Backfill ==========================
+// ══════════════════════════ BULK & BACKFILL ══════════════════════════
 
-async function createClassesBulk(data) {
-  const { classes = [] } = data;
-  if (!classes.length) throw new Error("No classes provided.");
+async function createAppointmentsBulk(workspace, data) {
+  const { appointments = [] } = data;
+  if (!appointments.length) throw new Error("No appointments provided.");
   const groupId = data.groupId || crypto.randomUUID();
   const created = [];
   const failed = [];
-  for (const item of classes) {
+  for (const item of appointments) {
     try {
-      const c = await createClass({ ...item, groupId });
-      created.push(c);
+      created.push(await createAppointment(workspace, { ...item, groupId }));
     } catch (err) {
       failed.push({ startTime: item.startTime, error: err.message });
     }
@@ -439,15 +425,21 @@ async function createClassesBulk(data) {
   return { groupId, created, failed };
 }
 
-async function backfillAccounting() {
-  const classes = await prisma.schoolClass.findMany({ include: { teacher: true } });
-  const events = await prisma.schoolEvent.findMany({ include: { assignees: true } });
-  const rowsAdded = await backfillAccountingSheet(classes, events);
-  return { classes: classes.length, events: events.length, rowsAdded };
+async function backfillAccounting(workspace) {
+  const appointments = await prisma.appointment.findMany({
+    where: { workspaceId: workspace.id },
+    include: { assignee: true },
+  });
+  const events = await prisma.event.findMany({
+    where: { workspaceId: workspace.id },
+    include: { assignees: true },
+  });
+  const rowsAdded = await backfillAccountingSheet(appointments, events);
+  return { appointments: appointments.length, events: events.length, rowsAdded };
 }
 
-async function syncCalendarAccess() {
-  const employees = await prisma.employee.findMany();
+async function syncCalendarAccess(workspace) {
+  const employees = await prisma.employee.findMany({ where: { workspaceId: workspace.id } });
   const emails = employees.map((emp) => emp.email).filter((email) => email && email.includes("@"));
   if (emails.length === 0) return 0;
   return await syncEmailsToGoogle(emails);
@@ -459,11 +451,11 @@ module.exports = {
   updateEvent,
   deleteEvent,
   createEventsBulk,
-  createClass,
-  getClasses,
-  deleteClass,
-  updateClass,
+  createAppointment,
+  getAppointments,
+  deleteAppointment,
+  updateAppointment,
   syncCalendarAccess,
-  createClassesBulk,
+  createAppointmentsBulk,
   backfillAccounting,
 };

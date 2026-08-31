@@ -1,5 +1,5 @@
-// جسر الـ inbox — بيحقن الرسايل الداخلة في Chatwoot عن طريق الـ Public API.
-// المسار العام بيتصادق بالـ inbox identifier بس، مش محتاج access token.
+// Inbox bridge — injects incoming messages into Chatwoot via the Public API.
+// The public path authenticates with the inbox identifier only; no access token needed.
 
 const BASE_URL = (process.env.CHATWOOT_BASE_URL || "https://app.chatwoot.com").replace(/\/$/, "");
 const INBOX = process.env.CHATWOOT_INBOX_IDENTIFIER;
@@ -31,15 +31,15 @@ async function call(path, body) {
   }
 }
 
-/** بينشئ contact ويرجع الـ source_id (ده اللي بنخزنه كـ inboxContactId) */
+// Creates a contact and returns the source_id (which we store as inboxContactId)
 async function createContact(lead) {
   const data = await call("/contacts", {
     name: lead.name || "Unknown",
     phone_number: lead.phone,
-    identifier: lead.id, // بنربطه بالـ lead بتاعنا
+    identifier: lead.id, // Link to our internal lead record
   });
 
-  // الـ source_id بيرجع في الجذر أو جوه contact_inboxes حسب الإصدار
+  // source_id is returned at the root or inside contact_inboxes depending on the version
   const sourceId =
     data?.source_id || data?.contact_inboxes?.[0]?.source_id || data?.contact?.source_id;
 
@@ -60,7 +60,7 @@ async function postMessage(sourceId, conversationId, content, messageType = "inc
   });
 }
 
-/** بيبعت رسالة بمرفق — multipart مش JSON */
+// Sends a message with an attachment — uses multipart/form-data instead of JSON
 async function postAttachment(sourceId, conversationId, file, content = "") {
   const url = inboxUrl(`/contacts/${sourceId}/conversations/${conversationId}/messages`);
 
@@ -72,7 +72,7 @@ async function postAttachment(sourceId, conversationId, file, content = "") {
   const timeout = setTimeout(() => controller.abort(), TIMEOUT_MS);
 
   try {
-    // مفيش Content-Type يدوي — fetch بيحطه مع الـ boundary لوحده
+    // No manual Content-Type — fetch sets it with the boundary automatically
     const response = await fetch(url, { method: "POST", body: form, signal: controller.signal });
     const data = await response.json().catch(() => ({}));
     if (!response.ok) {

@@ -11,53 +11,47 @@ const {
   listCampaigns,
   findCampaigns,
 } = require("./campaigns.service");
-const { getTemplates } = require("../../utils/whatsapp");
+const { getTemplates } = require("../../integrations/whatsapp");
 
-// قوالب ميتا المعتمدة — بتتقرا مباشرة، مفيش أسماء مكتوبة في الكود
+// Approved Meta templates — read live from the deployment's WhatsApp account
 router.get("/templates", async (req, res) => {
   try {
-    const templates = await getTemplates();
-    res.status(200).json(templates);
+    res.status(200).json(await getTemplates());
   } catch (error) {
     console.error("[Campaign] Templates fetch failed:", error.message);
     res.status(500).json({ error: error.message });
   }
 });
 
-// إحصائيات قاعدة العملاء — للاستكشاف قبل الإنشاء
 router.get("/audience", async (req, res) => {
   try {
-    const stats = await getAudienceStats();
-    res.status(200).json(stats);
+    res.status(200).json(await getAudienceStats(req.workspace.id));
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
 });
 
-// قايمة الحملات
 router.get("/", async (req, res) => {
   try {
     const limit = Number(req.query.limit) || 10;
-    res.status(200).json(await listCampaigns(limit));
+    res.status(200).json(await listCampaigns(req.workspace.id, limit));
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
 });
 
-// بحث للـ autocomplete
 router.get("/search", async (req, res) => {
   try {
     const statuses = req.query.status ? String(req.query.status).split(",") : null;
-    res.status(200).json(await findCampaigns(statuses));
+    res.status(200).json(await findCampaigns(req.workspace.id, statuses));
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
 });
 
-// إنشاء حملة (DRAFT) — بيرجع المعاينة والقمع
 router.post("/", async (req, res) => {
   try {
-    const result = await createCampaign(req.body);
+    const result = await createCampaign(req.body, req.workspace.id);
     res.status(201).json(result);
   } catch (error) {
     console.error("[Campaign] Create failed:", error.message);
@@ -67,18 +61,19 @@ router.post("/", async (req, res) => {
 
 router.get("/:id", async (req, res) => {
   try {
-    res.status(200).json(await getCampaignInfo(req.params.id));
+    res.status(200).json(await getCampaignInfo(req.workspace.id, req.params.id));
   } catch (error) {
     res.status(404).json({ error: error.message });
   }
 });
 
-// قايمة المستقبلين بالأسماء والأرقام — دي اللي بتتراجع قبل التأكيد
 router.get("/:id/recipients", async (req, res) => {
   try {
     const limit = req.query.limit ? Number(req.query.limit) : null;
     const status = req.query.status ? String(req.query.status) : null;
-    res.status(200).json(await getCampaignRecipients(req.params.id, { limit, status }));
+    res
+      .status(200)
+      .json(await getCampaignRecipients(req.workspace.id, req.params.id, { limit, status }));
   } catch (error) {
     res.status(404).json({ error: error.message });
   }
@@ -86,7 +81,7 @@ router.get("/:id/recipients", async (req, res) => {
 
 router.get("/:id/progress", async (req, res) => {
   try {
-    res.status(200).json(await getCampaignProgress(req.params.id));
+    res.status(200).json(await getCampaignProgress(req.workspace.id, req.params.id));
   } catch (error) {
     res.status(404).json({ error: error.message });
   }
@@ -94,8 +89,8 @@ router.get("/:id/progress", async (req, res) => {
 
 router.post("/:id/start", async (req, res) => {
   try {
-    await startCampaign(req.params.id);
-    res.status(200).json(await getCampaignProgress(req.params.id));
+    await startCampaign(req.workspace.id, req.params.id);
+    res.status(200).json(await getCampaignProgress(req.workspace.id, req.params.id));
   } catch (error) {
     console.error("[Campaign] Start failed:", error.message);
     res.status(400).json({ error: error.message });
@@ -104,8 +99,8 @@ router.post("/:id/start", async (req, res) => {
 
 router.post("/:id/stop", async (req, res) => {
   try {
-    await stopCampaign(req.params.id);
-    res.status(200).json(await getCampaignProgress(req.params.id));
+    await stopCampaign(req.workspace.id, req.params.id);
+    res.status(200).json(await getCampaignProgress(req.workspace.id, req.params.id));
   } catch (error) {
     res.status(400).json({ error: error.message });
   }

@@ -2,23 +2,17 @@ if (process.env.NODE_ENV !== "production") {
   require("dotenv").config();
 }
 const express = require("express");
-const prisma = require("./prisma");
-const employeeRoutes = require("./modules/employees/employees.routes");
-const roleRoutes = require("./modules/roles/roles.routes");
-const taskRoutes = require("./modules/tasks/tasks.routes");
-const dashboardRoutes = require("./modules/dashboard/dashboard.routes");
-const calendarRoutes = require("./modules/calendar/calendar.routes");
-const crmRoutes = require("./modules/crm/crm.routes");
-const { requireApiKey } = require("./middleware/auth.middleware");
-const settingsRoutes = require("./modules/settings/settings.routes");
+
+const { requireApiKey, requireWorkspace } = require("./middleware/auth.middleware");
+
 const app = express();
 
 app.get("/health", (req, res) => {
-  res.json({ status: "ok", service: "Coding Hub API" });
+  res.json({ status: "ok", service: "Omni-Ops API" });
 });
 
-// بنحتفظ بالـ body الخام عشان التحقق من توقيع ميتا
-// لازم يكون الـ buffer الأصلي بالظبط — JSON.stringify مش هيطلع نفس الـ HMAC
+// Keep the raw body — Meta's webhook verifies its HMAC signature against it.
+// It must be the exact original buffer; JSON.stringify would not produce the same HMAC.
 app.use(
   express.json({
     verify: (req, res, buf) => {
@@ -27,32 +21,38 @@ app.use(
   })
 );
 
-// ✅ التعديل هنا: حماية كل المسارات بالـ API Key ما عدا مسار الويب هوك بتاع ميتا
+// 1) Internal-key gate — everything except Meta webhooks must come from the bot
 app.use((req, res, next) => {
   if (
     req.path === "/crm/whatsapp/webhook" ||
     req.path === "/crm/inbox/callback" ||
     (process.env.NODE_ENV !== "production" && req.path === "/crm/whatsapp/test")
   ) {
-    return next(); // اسمح لطلبات ميتا تعدي بدون API Key
+    return next(); // Meta requests carry no internal key
   }
-  return requireApiKey(req, res, next); // طبق الحماية على باقي السيرفر
+  return requireApiKey(req, res, next);
 });
 
-app.use("/settings", settingsRoutes);
-app.use("/employees", employeeRoutes);
-app.use("/roles", roleRoutes);
-app.use("/tasks", taskRoutes);
-app.use("/dashboard", dashboardRoutes);
-app.use("/calendar", calendarRoutes);
-app.use("/crm", crmRoutes);
-app.use("/bills", require("./modules/bills/bills.routes"));
+// 2) Workspace management — not scoped (this is how workspaces are created/found)
+app.use("/workspaces", require("./modules/workspaces/workspaces.routes"));
+
+// 3) Tenant scoping — every business module below sees req.workspace
+app.use(requireWorkspace);
+
+app.use("/employees", require("./modules/employees/employees.routes"));
+app.use("/roles", require("./modules/roles/roles.routes"));
+app.use("/tasks", require("./modules/tasks/tasks.routes"));
+app.use("/dashboard", require("./modules/dashboard/dashboard.routes"));
+app.use("/calendar", require("./modules/calendar/calendar.routes"));
+app.use("/crm", require("./modules/crm/crm.routes"));
+app.use("/invoices", require("./modules/invoices/invoices.routes")); // path renamed; service refit comes next
 app.use("/campaigns", require("./modules/campaigns/campaigns.routes"));
-// "::" مهمة — الشبكة الداخلية في Railway بتشتغل على IPv6
+app.use("/settings/links", require("./modules/links/links.routes"));
+// "::" matters — Railway's internal network runs on IPv6
 app.listen(3000, "::", () => {
   console.log("Server running on port 3000");
   require("./jobs/maintenance").startMaintenance();
-  // أي حملة كانت شغالة وقت إعادة التشغيل بتكمّل من حيث وقفت
+  // Any campaign that was running when the server restarted resumes where it stopped
   require("./modules/campaigns/campaigns.service")
     .resumeRunningCampaigns()
     .catch(() => {});

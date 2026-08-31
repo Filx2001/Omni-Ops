@@ -1,4 +1,4 @@
-// بيتأكد إن الريكويست جاي من ميتا فعلاً مش من أي حد عارف اللينك
+// Verifies that the request actually came from Meta, not just anyone who knows the URL.
 const crypto = require("crypto");
 
 function verifyWhatsAppSignature(req, res, next) {
@@ -9,7 +9,6 @@ function verifyWhatsAppSignature(req, res, next) {
     return res.sendStatus(403);
   }
 
-  // الـ raw body بيتحفظ في app.js عن طريق verify hook
   if (!req.rawBody) {
     console.error("[WhatsApp] rawBody is missing - check express.json verify hook in app.js");
     return res.sendStatus(403);
@@ -24,7 +23,6 @@ function verifyWhatsAppSignature(req, res, next) {
   const expected =
     "sha256=" + crypto.createHmac("sha256", appSecret).update(req.rawBody).digest("hex");
 
-  // المقارنة لازم تكون ثابتة الوقت عشان نمنع timing attacks
   const received = Buffer.from(header);
   const computed = Buffer.from(expected);
   if (received.length !== computed.length || !crypto.timingSafeEqual(received, computed)) {

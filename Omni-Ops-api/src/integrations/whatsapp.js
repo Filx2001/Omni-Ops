@@ -1,9 +1,9 @@
-// كلاينت بسيط لواتساب Cloud API — الإرسال بس
-// Node 24 فيه fetch و FormData و Blob مدمجين، فمش محتاجين مكتبة زيادة
+// Simple WhatsApp Cloud API client — sending only.
+// Node 18+ has fetch, FormData and Blob built-in, no extra libraries needed.
 
 const API_VERSION = process.env.WHATSAPP_API_VERSION || "v22.0";
 
-// حدود ميتا لكل نوع
+// Meta limits per type
 const SIZE_LIMITS = {
   image: 5 * 1024 * 1024,
   video: 16 * 1024 * 1024,
@@ -11,7 +11,7 @@ const SIZE_LIMITS = {
   document: 100 * 1024 * 1024,
 };
 
-// أنواع الهيدر اللي محتاجة ملف يتبعت مع كل رسالة
+// Header types that require a file attached to every message
 const MEDIA_HEADERS = ["IMAGE", "VIDEO", "DOCUMENT"];
 
 function getConfig() {
@@ -23,11 +23,9 @@ function getConfig() {
   return { token, phoneNumberId };
 }
 
-/**
- * بيبعت رسالة نصية ويرجع الـ wamid بتاعها.
- * ملحوظة: ده بيشتغل جوه نافذة الـ 24 ساعة بس.
- * برا النافذة ميتا بترفض وبتطلب template معتمد.
- */
+// Sends a text message and returns the wamid.
+// Note: This only works inside the 24-hour window.
+// Outside the window Meta rejects it and requires an approved template.
 async function sendText(to, body) {
   const { token, phoneNumberId } = getConfig();
   const url = `https://graph.facebook.com/${API_VERSION}/${phoneNumberId}/messages`;
@@ -41,7 +39,7 @@ async function sendText(to, body) {
     body: JSON.stringify({
       messaging_product: "whatsapp",
       recipient_type: "individual",
-      to, // بيقبل الرقم بالكود الدولي، بـ + أو من غيرها
+      to,
       type: "text",
       text: { preview_url: false, body },
     }),
@@ -59,7 +57,7 @@ async function sendText(to, body) {
   return data?.messages?.[0]?.id || null;
 }
 
-/** بيرفع ملف لميتا ويرجع media id يتبعت بيه */
+// Uploads a file to Meta and returns the media id to send with
 async function uploadMedia(blob, fileName, mimeType) {
   const { token, phoneNumberId } = getConfig();
 
@@ -68,7 +66,6 @@ async function uploadMedia(blob, fileName, mimeType) {
   form.append("type", mimeType);
   form.append("file", blob, fileName);
 
-  // مفيش Content-Type يدوي — fetch بيحطه مع الـ boundary لوحده
   const response = await fetch(`https://graph.facebook.com/${API_VERSION}/${phoneNumberId}/media`, {
     method: "POST",
     headers: { Authorization: `Bearer ${token}` },
@@ -85,15 +82,11 @@ async function uploadMedia(blob, fileName, mimeType) {
   return data.id;
 }
 
-/**
- * بيبعت ميديا بالـ media id.
- * type: image | video | audio | document
- */
+// Sends media by media id. type: image | video | audio | document
 async function sendMedia(to, mediaId, type, caption = "", fileName = null) {
   const { token, phoneNumberId } = getConfig();
 
   const payload = { id: mediaId };
-  // الصوت مبيقبلش كابشن
   if (caption && type !== "audio") payload.caption = caption;
   if (type === "document" && fileName) payload.filename = fileName;
 
@@ -122,11 +115,9 @@ async function sendMedia(to, mediaId, type, caption = "", fileName = null) {
   return data?.messages?.[0]?.id || null;
 }
 
-/**
- * بيطلّع المتغيرات من نص القالب.
- * ميتا بتدعم شكلين: مرقّم {{1}} أو بأسماء {{customer_name}}.
- * الاتنين مختلفين في الإرسال، فلازم نفرّق بينهم من هنا.
- */
+// Extracts variables from template text.
+// Meta supports two formats: numbered {{1}} or named {{customer_name}}.
+// They are sent differently, so we must distinguish them here.
 function parsePlaceholders(text) {
   const matches = String(text || "").match(/\{\{\s*([^}\s]+)\s*\}\}/g) || [];
   const names = [];
@@ -140,13 +131,10 @@ function parsePlaceholders(text) {
   return { names, count: names.length, named };
 }
 
-/**
- * بيقرا القوالب المعتمدة من ميتا مباشرة — مفيش أسماء مكتوبة في الكود.
- *
- * بيرجع تعريف كامل مش بس عدد متغيرات الـ body: نوع الهيدر، وهل الهيدر
- * محتاج ملف، وهل فيه أزرار بمتغيرات. من غير ده الحملة بتتعمل وتفشل
- * وقت الإرسال بكود 132012 بدل ما ترفض من البداية.
- */
+// Reads approved templates directly from Meta — no hardcoded names.
+// Returns a full definition, not just body variable count: header type,
+// whether header needs a file, and button variables. Without this,
+// campaigns fail at send time with code 132012 instead of being rejected early.
 async function getTemplates() {
   const token = process.env.WHATSAPP_ACCESS_TOKEN;
   const wabaId = process.env.WHATSAPP_WABA_ID;
@@ -166,8 +154,8 @@ async function getTemplates() {
   const all = data.data || [];
   return (
     all
-      // ميتا بتستخدم حالات فرعية زي "Active - Quality pending" وهي معتمدة وشغالة.
-      // الرفض بيبقى REJECTED أو PENDING (لسه تحت المراجعة).
+      // Meta uses sub-statuses like "Active - Quality pending" which are approved and working.
+      // Rejection is REJECTED or PENDING (still under review).
       .filter((t) => !["REJECTED", "PENDING", "PENDING_DELETION", "DISABLED"].includes(t.status))
       .map((t) => {
         const components = t.components || [];
@@ -182,7 +170,7 @@ async function getTemplates() {
         const headerFormat = header?.format || null; // IMAGE · VIDEO · DOCUMENT · TEXT · null
         const headerVars = parsePlaceholders(header?.text || "");
 
-        // زرار URL ديناميكي بياخد متغير كمان
+        // Dynamic URL button that also takes a variable
         const buttonVariableCount = (buttons?.buttons || []).filter(
           (b) => b.type === "URL" && /\{\{/.test(b.url || "")
         ).length;
@@ -193,19 +181,12 @@ async function getTemplates() {
           category: t.category,
           status: t.status,
           bodyText,
-
-          // متغيرات الـ body
           variableCount: bodyVars.count,
           variableNames: bodyVars.names,
           usesNamedParams: bodyVars.named,
-
-          // الهيدر
           headerFormat,
-          // محتاج ملف يتبعت مع كل رسالة (صورة/فيديو/ملف)
           headerNeedsMedia: MEDIA_HEADERS.includes(headerFormat || ""),
-          // هيدر نصي فيه متغير
           headerVariableCount: headerFormat === "TEXT" ? headerVars.count : 0,
-
           hasButtons: Boolean(buttons),
           buttonVariableCount,
         };
@@ -213,22 +194,18 @@ async function getTemplates() {
   );
 }
 
-/**
- * بيبعت قالب معتمد — ده الطريق الوحيد للإرسال برا نافذة الـ 24 ساعة.
- *
- * options:
- *   headerMediaId   — media id من uploadMedia لقوالب هيدر الصورة/الفيديو/الملف
- *   headerMediaLink — بديل: رابط عام للملف
- *   headerFormat    — IMAGE | VIDEO | DOCUMENT (محتاج مع الميديا)
- *   variableNames   — أسماء المتغيرات لو القالب بيستخدم {{name}} مش {{1}}
- */
+// Sends an approved template — the only way to send outside the 24h window.
+// options:
+//   headerMediaId   — media id from uploadMedia for image/video/document headers
+//   headerMediaLink — alternative: public URL for the file
+//   headerFormat    — IMAGE | VIDEO | DOCUMENT (required with media)
+//   variableNames   — variable names if template uses {{name}} instead of {{1}}
 async function sendTemplate(to, templateName, language = "en", variables = [], options = {}) {
   const { token, phoneNumberId } = getConfig();
   const { headerMediaId, headerMediaLink, headerFormat, variableNames = null } = options;
 
   const components = [];
 
-  // ---------- الهيدر ----------
   if (headerFormat && MEDIA_HEADERS.includes(headerFormat)) {
     if (!headerMediaId && !headerMediaLink) {
       throw new Error(
@@ -236,7 +213,7 @@ async function sendTemplate(to, templateName, language = "en", variables = [], o
       );
     }
 
-    const key = headerFormat.toLowerCase(); // image · video · document
+    const key = headerFormat.toLowerCase();
     components.push({
       type: "header",
       parameters: [
@@ -248,13 +225,11 @@ async function sendTemplate(to, templateName, language = "en", variables = [], o
     });
   }
 
-  // ---------- الـ body ----------
   if (variables.length > 0) {
     components.push({
       type: "body",
       parameters: variables.map((v, i) => {
         const param = { type: "text", text: String(v) };
-        // القوالب بالمتغيرات المسماة محتاجة parameter_name مع كل قيمة
         if (variableNames && variableNames[i] && !/^\d+$/.test(variableNames[i])) {
           param.parameter_name = variableNames[i];
         }
@@ -285,7 +260,6 @@ async function sendTemplate(to, templateName, language = "en", variables = [], o
   const data = await response.json().catch(() => ({}));
   if (!response.ok) {
     const err = data?.error || {};
-    // الكود مهم — المحرك بيفرّق بين حد يومي وفشل حقيقي
     throw new Error(
       `Template send failed [${response.status}] ${err.code || ""} ${err.message || "unknown error"}`.trim()
     );

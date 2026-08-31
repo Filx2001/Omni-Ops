@@ -1,11 +1,11 @@
-// تنزيل الميديا — بننقلها مباشرة من غير تخزين على السيرفر.
-// الحماية: بنفحص الحجم قبل التنزيل، وبننزّل ملف واحد في المرة.
+// Media downloads — streamed directly without storing on the server.
+// Protection: checks size before downloading, and downloads one file at a time.
 
 const DEFAULT_MAX = Number(process.env.WHATSAPP_MEDIA_MAX_MB || 5) * 1024 * 1024;
 const API_VERSION = process.env.WHATSAPP_API_VERSION || "v22.0";
 const TIMEOUT_MS = 30000;
 
-// طابور بواحد — بيمنع إن كذا ملف ينزلوا مع بعض ويفجّروا الذاكرة
+// Queue of 1 — prevents multiple files from downloading at once and blowing up memory
 let queue = Promise.resolve();
 function enqueue(task) {
   const result = queue.then(task, task);
@@ -35,11 +35,9 @@ const EXTENSIONS = {
   "application/pdf": "pdf",
 };
 
-/**
- * بينزّل ميديا من ميتا بالـ media id.
- * بيرجع { blob, mimeType, fileName } أو null.
- * مبيرميش أبداً — فشل التنزيل مايوقفش الرسالة نفسها.
- */
+// Downloads media from Meta by media id.
+// Returns { blob, mimeType, fileName } or null.
+// Never throws — download failure shouldn't stop the message itself.
 async function downloadMedia(mediaId) {
   if (!mediaId) return null;
 
@@ -48,7 +46,7 @@ async function downloadMedia(mediaId) {
     if (!token) return null;
 
     try {
-      // 1. معلومات الملف — الحجم بييجي هنا قبل ما ننزّل أي بايت
+      // 1. File metadata — size comes here before we download a single byte
       const metaRes = await fetchWithTimeout(
         `https://graph.facebook.com/${API_VERSION}/${mediaId}`,
         { headers: { Authorization: `Bearer ${token}` } }
@@ -62,14 +60,14 @@ async function downloadMedia(mediaId) {
       const meta = await metaRes.json();
       const size = Number(meta.file_size || 0);
 
-      // الحارس الأساسي — بنرفض قبل التنزيل
+      // Primary guard — reject before downloading
       if (size > DEFAULT_MAX) {
         console.warn(`[Media] Skipped ${mediaId}: ${Math.round(size / 1024)}KB exceeds limit`);
         return null;
       }
       if (!meta.url) return null;
 
-      // 2. التنزيل الفعلي — لازم نفس التوكن
+      // 2. Actual download — requires the same token
       const fileRes = await fetchWithTimeout(meta.url, {
         headers: { Authorization: `Bearer ${token}` },
       });
@@ -92,10 +90,8 @@ async function downloadMedia(mediaId) {
   });
 }
 
-/**
- * بينزّل ملف من رابط عام (مرفقات Chatwoot).
- * بيفحص content-length قبل ما يقرا الجسم — نفس فكرة الحماية.
- */
+// Downloads a file from a public URL (Chatwoot attachments).
+// Checks content-length before reading the body — same protection idea.
 async function downloadUrl(url, maxBytes = DEFAULT_MAX, fileName = "file") {
   if (!url) return null;
 
@@ -107,7 +103,7 @@ async function downloadUrl(url, maxBytes = DEFAULT_MAX, fileName = "file") {
         return null;
       }
 
-      // الفحص قبل استهلاك الجسم
+      // Check before consuming the body
       const declared = Number(res.headers.get("content-length") || 0);
       if (declared > maxBytes) {
         console.warn(`[Media] Skipped: ${Math.round(declared / 1024 / 1024)}MB exceeds limit`);
@@ -116,7 +112,7 @@ async function downloadUrl(url, maxBytes = DEFAULT_MAX, fileName = "file") {
 
       const blob = await res.blob();
 
-      // حماية تانية لو الهيدر مكانش موجود
+      // Secondary guard if the header wasn't present
       if (blob.size > maxBytes) {
         console.warn(`[Media] Skipped after download: ${Math.round(blob.size / 1024 / 1024)}MB`);
         return null;

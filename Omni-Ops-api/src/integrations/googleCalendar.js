@@ -1,19 +1,53 @@
 const { google } = require("googleapis");
 
 const SCOPES = ["https://www.googleapis.com/auth/calendar"];
-const credentials = JSON.parse(process.env.GOOGLE_CREDENTIALS_JSON);
 
-const auth = new google.auth.GoogleAuth({
-  credentials: credentials,
-  scopes: SCOPES,
-});
+let auth = null;
+let calendar = null;
 
-const calendar = google.calendar({ version: "v3", auth });
+// Lazy initialization — if Google credentials aren't configured,
+// the API still starts, but calendar sync functions will gracefully no-op.
+function getClient() {
+  if (calendar) return calendar;
+  try {
+    const raw = process.env.GOOGLE_CREDENTIALS_JSON;
+    if (!raw) {
+      console.warn("[Google] GOOGLE_CREDENTIALS_JSON not set. Calendar sync disabled.");
+      return null;
+    }
+    const credentials = JSON.parse(raw);
+    auth = new google.auth.GoogleAuth({ credentials, scopes: SCOPES });
+    calendar = google.calendar({ version: "v3", auth });
+    return calendar;
+  } catch (err) {
+    console.error("[Google] Failed to initialize Google Calendar client:", err.message);
+    return null;
+  }
+}
+
+// The timezone for Google Calendar events. Configurable via env, defaults to UTC.
+const CALENDAR_TZ = process.env.GOOGLE_CALENDAR_TZ || "UTC";
+
+// Helper to get YYYY-MM-DD for all-day events, adjusted by timezone offset
+function getSafeDateStr(d, tzOffsetHours = 0) {
+  const tzDate = new Date(d.getTime() + tzOffsetHours * 60 * 60 * 1000);
+  const year = tzDate.getUTCFullYear();
+  const month = String(tzDate.getUTCMonth() + 1).padStart(2, "0");
+  const day = String(tzDate.getUTCDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+}
 
 async function addEventToGoogle(eventData) {
+  const client = getClient();
+  if (!client) return null;
+
   try {
-    // calendarId اختياري — التاسكات الشخصية بتروح لكالندر منفصل
     const mainCalendarId = eventData.calendarId || process.env.GOOGLE_CALENDAR_ID;
+    if (!mainCalendarId) {
+      console.warn("[Google] GOOGLE_CALENDAR_ID not set. Skipping event creation.");
+      return null;
+    }
+
     const start = new Date(eventData.startDate);
     const end = new Date(eventData.endDate);
 
@@ -23,18 +57,12 @@ async function addEventToGoogle(eventData) {
     };
 
     if (eventData.isAllDay) {
-      const getSafeDateStr = (d) => {
-        const tzDate = new Date(d.getTime() + 3 * 60 * 60 * 1000);
-        const year = tzDate.getUTCFullYear();
-        const month = String(tzDate.getUTCMonth() + 1).padStart(2, "0");
-        const day = String(tzDate.getUTCDate()).padStart(2, "0");
-        return `${year}-${month}-${day}`;
-      };
+      const offsetHours = parseInt(process.env.GOOGLE_TZ_OFFSET_HOURS || "0", 10);
       const nextDay = new Date(end);
       nextDay.setDate(nextDay.getDate() + 1);
 
-      resource.start = { date: getSafeDateStr(start) };
-      resource.end = { date: getSafeDateStr(nextDay) };
+      resource.start = { date: getSafeDateStr(start, offsetHours) };
+      resource.end = { date: getSafeDateStr(nextDay, offsetHours) };
     } else {
       const isMultiDay = end.getTime() - start.getTime() > 24 * 60 * 60 * 1000;
       const firstDayEnd = new Date(start);
@@ -42,10 +70,10 @@ async function addEventToGoogle(eventData) {
 
       if (firstDayEnd <= start) firstDayEnd.setUTCDate(firstDayEnd.getUTCDate() + 1);
 
-      resource.start = { dateTime: start.toISOString(), timeZone: "Asia/Qatar" };
+      resource.start = { dateTime: start.toISOString(), timeZone: CALENDAR_TZ };
       resource.end = {
         dateTime: isMultiDay ? firstDayEnd.toISOString() : end.toISOString(),
-        timeZone: "Asia/Qatar",
+        timeZone: CALENDAR_TZ,
       };
 
       if (isMultiDay) {
@@ -56,11 +84,10 @@ async function addEventToGoogle(eventData) {
       }
     }
 
-    // 🌟 1. الرفع الأساسي للتقويم العام (عشان كل حاجة تبان للمديرة)
     let mainEventId = null;
     const inserted = [];
     try {
-      const mainResponse = await calendar.events.insert({
+      const mainResponse = await client.events.insert({
         calendarId: mainCalendarId,
         resource: resource,
       });
@@ -69,14 +96,13 @@ async function addEventToGoogle(eventData) {
       console.log("✅ Event added to MAIN Calendar:", mainResponse.data.htmlLink);
     } catch (mainErr) {
       console.error("❌ Failed to add to MAIN Calendar:", mainErr.message);
-      return null; // لو فشل يرفع للعام، هيوقف عشان ميحصلش لغبطة
+      return null;
     }
 
-    // 🌟 2. الرفع الموازي لتقويم الموظف (عشان يشوف تاسكاته وحصصه لوحده)
     if (eventData.targetEmails && eventData.targetEmails.length > 0) {
       for (const email of eventData.targetEmails) {
         try {
-          const copyRes = await calendar.events.insert({
+          const copyRes = await client.events.insert({
             calendarId: email,
             resource: resource,
           });
@@ -96,9 +122,14 @@ async function addEventToGoogle(eventData) {
 }
 
 async function deleteEventFromGoogle(eventData) {
+  const client = getClient();
+  if (!client) return 0;
+
   try {
-    // 🌟 بناء قائمة التقاويم للبحث
-    const calendarsToSearch = [eventData.calendarId || process.env.GOOGLE_CALENDAR_ID];
+    const mainCalendarId = eventData.calendarId || process.env.GOOGLE_CALENDAR_ID;
+    if (!mainCalendarId) return 0;
+
+    const calendarsToSearch = [mainCalendarId];
     if (eventData.targetEmails && eventData.targetEmails.length > 0) {
       calendarsToSearch.push(...eventData.targetEmails);
     }
@@ -106,10 +137,11 @@ async function deleteEventFromGoogle(eventData) {
     startWindow.setDate(startWindow.getDate() - 3);
     const endWindow = new Date(eventData.startDate);
     endWindow.setDate(endWindow.getDate() + 3);
+
     let deletedCount = 0;
     for (const calendarId of calendarsToSearch) {
       try {
-        const response = await calendar.events.list({
+        const response = await client.events.list({
           calendarId: calendarId,
           q: eventData.title,
           timeMin: startWindow.toISOString(),
@@ -123,34 +155,36 @@ async function deleteEventFromGoogle(eventData) {
         );
         if (exactMatch) {
           const masterEventId = exactMatch.id.split("_")[0];
-
-          await calendar.events.delete({
+          await client.events.delete({
             calendarId: calendarId,
             eventId: masterEventId,
           });
           deletedCount++;
           console.log(`🗑️ Deleted from Calendar (${calendarId})`);
-        } else {
-          console.log(`ℹ️ No matching event found in ${calendarId}`);
         }
       } catch (err) {
         console.log(`⚠️ Could not delete from ${calendarId}: ${err.message}`);
       }
     }
-    console.log(`✅ Total events deleted: ${deletedCount}`);
     return deletedCount;
   } catch (error) {
     console.error("❌ Error in deleteEventFromGoogle:", error.message);
+    return 0;
   }
 }
 
 async function syncEmailsToGoogle(emails) {
+  const client = getClient();
+  if (!client) return 0;
+
   try {
     const calendarId = process.env.GOOGLE_CALENDAR_ID;
+    if (!calendarId) return 0;
+
     let addedCount = 0;
     for (const email of emails) {
       try {
-        await calendar.acl.insert({
+        await client.acl.insert({
           calendarId: calendarId,
           resource: { role: "reader", scope: { type: "user", value: email } },
         });
@@ -162,20 +196,23 @@ async function syncEmailsToGoogle(emails) {
     return 0;
   }
 }
-// 🎯 مسح دقيق بالمعرفات المخزنة — مفيش بحث بالاسم ولا مسح بالغلط
+
 async function deleteGoogleEventsByIds(inserted = []) {
+  const client = getClient();
+  if (!client) return 0;
+
   let deleted = 0;
   for (const item of inserted) {
     try {
-      await calendar.events.delete({ calendarId: item.calendarId, eventId: item.eventId });
+      await client.events.delete({ calendarId: item.calendarId, eventId: item.eventId });
       deleted++;
     } catch (err) {
       console.log(`⚠️ Could not delete ${item.eventId} from ${item.calendarId}: ${err.message}`);
     }
   }
-  console.log(`✅ Deleted ${deleted} Google event(s) by ID`);
   return deleted;
 }
+
 module.exports = {
   addEventToGoogle,
   deleteEventFromGoogle,

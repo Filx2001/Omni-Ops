@@ -177,7 +177,7 @@ module.exports = {
 
       let me;
       try {
-        me = (await axios.get(`${process.env.API_URL}/employees/external/${interaction.user.id}`))
+        me = (await axios.get(`/employees/external/${interaction.user.id}`))
           .data;
       } catch {}
 
@@ -194,7 +194,7 @@ module.exports = {
         });
       }
 
-      await axios.patch(`${process.env.API_URL}/employees/${me.id}`, {
+      await axios.patch(`/employees/${me.id}`, {
         dailyReportEnabled: enabled,
       });
       return interaction.editReply({
@@ -213,7 +213,7 @@ module.exports = {
     if (subcommand === "links") {
       await interaction.deferReply({ flags: MessageFlags.Ephemeral });
       try {
-        const { data } = await axios.get(`${process.env.API_URL}/settings/links`);
+        const { data } = await axios.get(`/settings/links`);
         if (!data?.sheets) {
           return interaction.editReply(
             "❌ Couldn't load the links. The API may not have the latest version deployed."

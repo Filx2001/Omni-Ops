@@ -164,14 +164,14 @@ module.exports = {
         const phone = interaction.options.getString("phone");
         const roleName = interaction.options.getString("role");
 
-        const rolesResponse = await axios.get(`${process.env.API_URL}/roles`);
+        const rolesResponse = await axios.get(`/roles`);
         const role = rolesResponse.data.find((r) => r.name === roleName);
 
         if (!role) {
           return interaction.editReply("❌ Role not found.");
         }
 
-        const response = await axios.post(`${process.env.API_URL}/employees`, {
+        const response = await axios.post(`/employees`, {
           name,
           email,
           phone,
@@ -210,7 +210,7 @@ module.exports = {
 
       await interaction.deferReply();
       try {
-        const response = await axios.get(`${process.env.API_URL}/employees`);
+        const response = await axios.get(`/employees`);
         const employees = response.data;
 
         if (!employees.length) {
@@ -247,7 +247,7 @@ module.exports = {
         const employeeId = interaction.options.getString("employee");
         const user = interaction.options.getUser("user");
         // Links the employee to a platform user ID (e.g., Discord or Slack)
-        const response = await axios.patch(`${process.env.API_URL}/employees/${employeeId}/link`, {
+        const response = await axios.patch(`/employees/${employeeId}/link`, {
           externalId: user.id,
         });
 
@@ -274,7 +274,7 @@ module.exports = {
       await interaction.deferReply();
       try {
         const employeeId = interaction.options.getString("employee");
-        const response = await axios.get(`${process.env.API_URL}/employees`);
+        const response = await axios.get(`/employees`);
         const employee = response.data.find((e) => e.id === employeeId);
 
         if (!employee) {
@@ -307,7 +307,7 @@ module.exports = {
 
         // Changed endpoint to use externalId
         const requesterResponse = await axios.get(
-          `${process.env.API_URL}/employees/external/${interaction.user.id}`
+          `/employees/external/${interaction.user.id}`
         );
         const requester = requesterResponse.data;
 
@@ -318,7 +318,7 @@ module.exports = {
             return interaction.editReply("❌ You can only view your own performance.");
           }
 
-          const employeesResponse = await axios.get(`${process.env.API_URL}/employees`);
+          const employeesResponse = await axios.get(`/employees`);
           employee = employeesResponse.data.find((e) => e.id === selectedEmployee);
 
           if (!employee) {
@@ -329,7 +329,7 @@ module.exports = {
         }
 
         const tasksResponse = await axios.get(
-          `${process.env.API_URL}/tasks/employee/${employee.id}`
+          `/tasks/employee/${employee.id}`
         );
         const tasks = tasksResponse.data;
 
@@ -376,7 +376,7 @@ module.exports = {
       await interaction.deferReply();
       try {
         const employeeId = interaction.options.getString("employee");
-        const employeesResponse = await axios.get(`${process.env.API_URL}/employees`);
+        const employeesResponse = await axios.get(`/employees`);
         const employee = employeesResponse.data.find((e) => e.id === employeeId);
 
         if (!employee) {
@@ -384,7 +384,7 @@ module.exports = {
         }
 
         const tasksResponse = await axios.get(
-          `${process.env.API_URL}/tasks/employee/${employee.id}`
+          `/tasks/employee/${employee.id}`
         );
         const tasks = tasksResponse.data;
 
@@ -421,7 +421,7 @@ module.exports = {
       let isCurrentAdmin = false;
       try {
         const empCheck = await axios.get(
-          `${process.env.API_URL}/employees/external/${interaction.user.id}`
+          `/employees/external/${interaction.user.id}`
         );
         if (empCheck.data?.role?.name === "Admin") {
           isCurrentAdmin = true;
@@ -441,7 +441,7 @@ module.exports = {
 
       try {
         const employeeId = interaction.options.getString("employee");
-        const rolesResponse = await axios.get(`${process.env.API_URL}/roles`);
+        const rolesResponse = await axios.get(`/roles`);
         const adminRole = rolesResponse.data.find((r) => r.name === "Admin");
 
         if (!adminRole) {
@@ -452,7 +452,7 @@ module.exports = {
           return interaction.editReply({ embeds: [errorEmbed] });
         }
 
-        const response = await axios.patch(`${process.env.API_URL}/employees/${employeeId}/role`, {
+        const response = await axios.patch(`/employees/${employeeId}/role`, {
           roleId: adminRole.id,
         });
 
@@ -509,7 +509,7 @@ module.exports = {
         }
 
         const response = await axios.patch(
-          `${process.env.API_URL}/employees/${employeeId}`,
+          `/employees/${employeeId}`,
           updateData
         );
 
@@ -536,7 +536,7 @@ module.exports = {
       try {
         const employeeId = interaction.options.getString("employee");
         const response = await axios.patch(
-          `${process.env.API_URL}/employees/${employeeId}/deactivate`
+          `/employees/${employeeId}/deactivate`
         );
 
         clearCache("employees_list");

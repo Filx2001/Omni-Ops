@@ -33,7 +33,7 @@ async function handleGlobalAutocomplete(interaction) {
       let tasks = [];
       try {
         const employeeResponse = await axios.get(
-          `${process.env.API_URL}/employees/external/${interaction.user.id}`
+          `/employees/external/${interaction.user.id}`
         );
         const currentEmployee = employeeResponse.data;
         const isManager = ["Admin", "Manager"].includes(currentEmployee.role?.name);
@@ -41,7 +41,7 @@ async function handleGlobalAutocomplete(interaction) {
           tasks = await getCachedData("all_tasks", "/tasks");
         } else {
           const tasksResponse = await axios.get(
-            `${process.env.API_URL}/tasks/employee/${currentEmployee.id}`
+            `/tasks/employee/${currentEmployee.id}`
           );
           tasks = tasksResponse.data;
         }
