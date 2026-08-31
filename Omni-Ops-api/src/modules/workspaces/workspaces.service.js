@@ -1,6 +1,7 @@
 const prisma = require("../../prisma");
 const crypto = require("crypto");
 
+/* ---------- Crypto helper (unchanged) ---------- */
 function encrypt(text) {
   if (!text || !process.env.SECRET_ENCRYPTION_KEY) return text;
   const iv = crypto.randomBytes(16);
@@ -14,38 +15,64 @@ function encrypt(text) {
   return `${iv.toString("hex")}:${encrypted}`;
 }
 
-async function getOrCreateByPlatform(platform, workspaceId, guildName = null) {
-  let ws = await prisma.workspace.findUnique({
+/* ---------- Internal helper ---------- */
+async function seedDefaultRoles(workspaceId) {
+  const defaultRoles = [
+    { name: "Admin", description: "Full system access" },
+    { name: "Manager", description: "Manage operations" },
+    { name: "Sales", description: "CRM" },
+    { name: "Support", description: "Inbox" },
+    { name: "Marketing", description: "Campaigns" },
+    { name: "Finance", description: "Billing" },
+  ];
+  for (const role of defaultRoles) {
+    await prisma.role.create({ data: { workspaceId, ...role } }).catch(() => {});
+  }
+}
+
+/* ---------- NEW contract (used by workspaces.routes.js) ---------- */
+
+// GET /workspaces — list all (bot cron engines)
+async function list() {
+  return prisma.workspace.findMany();
+}
+
+// GET /workspaces/:platform/:workspaceId — null if not found (bot onboarding relies on 404)
+async function getByExternal(platform, workspaceId) {
+  return prisma.workspace.findUnique({
     where: { platform_workspaceId: { platform, workspaceId } },
   });
-  if (!ws) {
-    ws = await prisma.workspace.create({
+}
+
+// POST /workspaces — idempotent create + seed default roles
+async function create({ platform = "DISCORD", workspaceId, organizationName }) {
+  const existing = await getByExternal(platform, workspaceId);
+  if (existing) return existing;
+
+  try {
+    const ws = await prisma.workspace.create({
       data: {
         platform,
         workspaceId,
-        organizationName: guildName || "Omni-Ops Workspace",
+        organizationName: organizationName || "Omni-Ops Workspace",
         timezone: "UTC",
         currency: "USD",
       },
     });
-    // Auto-seed default roles for the new tenant
-    const defaultRoles = [
-      { name: "Admin", description: "Full system access" },
-      { name: "Manager", description: "Manage operations" },
-      { name: "Sales", description: "CRM" },
-      { name: "Support", description: "Inbox" },
-      { name: "Marketing", description: "Campaigns" },
-      { name: "Finance", description: "Billing" },
-    ];
-    for (const role of defaultRoles) {
-      await prisma.role.create({ data: { workspaceId: ws.id, ...role } }).catch(() => {});
-    }
+    await seedDefaultRoles(ws.id);
+    return ws;
+  } catch (err) {
+    // Race condition: another request created it first (unique constraint)
+    if (err?.code === "P2002") return getByExternal(platform, workspaceId);
+    throw err;
   }
-  return ws;
 }
 
-async function updateWorkspace(platform, workspaceId, data) {
-  const ws = await getOrCreateByPlatform(platform, workspaceId);
+// PATCH /workspaces/discord/:workspaceId — upsert + encrypt secrets
+async function updateByExternal(platform, workspaceId, data) {
+  let ws = await getByExternal(platform, workspaceId);
+  if (!ws) ws = await create({ platform, workspaceId });
+
   const updateData = { ...data };
   if (data.aiApiKey !== undefined) {
     updateData.aiApiKey = data.aiApiKey === null ? null : encrypt(data.aiApiKey);
@@ -53,4 +80,18 @@ async function updateWorkspace(platform, workspaceId, data) {
   return prisma.workspace.update({ where: { id: ws.id }, data: updateData });
 }
 
-module.exports = { getOrCreateByPlatform, updateWorkspace };
+/* ---------- Legacy aliases (so other modules/middleware keep working) ---------- */
+const getOrCreateByPlatform = (platform, workspaceId, guildName = null) =>
+  create({ platform, workspaceId, organizationName: guildName });
+
+const updateWorkspace = (platform, workspaceId, data) =>
+  updateByExternal(platform, workspaceId, data);
+
+module.exports = {
+  list,
+  getByExternal,
+  create,
+  updateByExternal,
+  getOrCreateByPlatform,
+  updateWorkspace,
+};
