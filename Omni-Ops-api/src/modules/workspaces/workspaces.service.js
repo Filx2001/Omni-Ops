@@ -1,92 +1,56 @@
 const prisma = require("../../prisma");
-const { encrypt, decrypt } = require("../../utils/crypto");
+const crypto = require("crypto");
 
-const DEFAULT_ROLES = [
-  { name: "Admin", description: "Full system control" },
-  { name: "Manager", description: "Day-to-day operations management" },
-  { name: "Agent", description: "Handles customers and tasks" },
-  { name: "Sales", description: "CRM and lead follow-up" },
-  { name: "Support", description: "Customer support" },
-  { name: "Marketing", description: "Campaigns and outreach" },
-  { name: "Freelancer", description: "External collaborator" },
-];
-
-const UPDATABLE_FIELDS = [
-  "organizationName",
-  "timezone",
-  "currency",
-  "reminderChannelId",
-  "logChannelId",
-  "scheduleChannelId",
-  "vacationChannelId",
-  "welcomeChannelId",
-  "introChannelId",
-  "billingChannelId",
-  "leadsChannelId",
-  "autoRoleId",
-];
-
-function serialize(ws) {
-  if (!ws) return null;
-  const aiApiKey = decrypt(ws.aiApiKey);
-  return { ...ws, aiApiKey, hasAiKey: Boolean(aiApiKey) };
+function encrypt(text) {
+  if (!text || !process.env.SECRET_ENCRYPTION_KEY) return text;
+  const iv = crypto.randomBytes(16);
+  const cipher = crypto.createCipheriv(
+    "aes-256-cbc",
+    Buffer.from(process.env.SECRET_ENCRYPTION_KEY, "hex"),
+    iv
+  );
+  let encrypted = cipher.update(text, "utf8", "hex");
+  encrypted += cipher.final("hex");
+  return `${iv.toString("hex")}:${encrypted}`;
 }
 
-async function list() {
-  const rows = await prisma.workspace.findMany({ orderBy: { createdAt: "asc" } });
-  return rows.map(serialize);
-}
-
-async function getByExternal(platform, workspaceId) {
-  const ws = await prisma.workspace.findUnique({
+async function getOrCreateByPlatform(platform, workspaceId, guildName = null) {
+  let ws = await prisma.workspace.findUnique({
     where: { platform_workspaceId: { platform, workspaceId } },
-    include: { roles: true },
   });
-  return serialize(ws);
-}
-
-async function create({ platform = "DISCORD", workspaceId, organizationName }) {
-  try {
-    const ws = await prisma.workspace.create({
+  if (!ws) {
+    ws = await prisma.workspace.create({
       data: {
         platform,
         workspaceId,
-        organizationName: organizationName || "My Organization",
-        roles: { create: DEFAULT_ROLES },
+        organizationName: guildName || "Omni-Ops Workspace",
+        timezone: "UTC",
+        currency: "USD",
       },
-      include: { roles: true },
     });
-    return serialize(ws);
-  } catch (err) {
-    if (err.code === "P2002") {
-      // Idempotent create — return the existing workspace
-      return getByExternal(platform, workspaceId);
+    // Auto-seed default roles for the new tenant
+    const defaultRoles = [
+      { name: "Admin", description: "Full system access" },
+      { name: "Manager", description: "Manage operations" },
+      { name: "Sales", description: "CRM" },
+      { name: "Support", description: "Inbox" },
+      { name: "Marketing", description: "Campaigns" },
+      { name: "Finance", description: "Billing" },
+    ];
+    for (const role of defaultRoles) {
+      await prisma.role.create({ data: { workspaceId: ws.id, ...role } }).catch(() => {});
     }
-    throw err;
   }
+  return ws;
 }
 
-async function updateByExternal(platform, workspaceId, patch) {
-  const data = {};
-  for (const field of UPDATABLE_FIELDS) {
-    if (patch[field] !== undefined) data[field] = patch[field];
+async function updateWorkspace(platform, workspaceId, data) {
+  const ws = await getOrCreateByPlatform(platform, workspaceId);
+  const updateData = { ...data };
+  if (data.aiApiKey !== undefined) {
+    updateData.aiApiKey = data.aiApiKey === null ? null : encrypt(data.aiApiKey);
   }
-  if (patch.aiApiKey !== undefined) {
-    data.aiApiKey = patch.aiApiKey ? encrypt(patch.aiApiKey) : null;
-  }
-  const ws = await prisma.workspace.upsert({
-    where: { platform_workspaceId: { platform, workspaceId } },
-    update: data,
-    create: {
-      platform,
-      workspaceId,
-      organizationName: patch.organizationName || "My Organization",
-      ...data,
-      roles: { create: DEFAULT_ROLES },
-    },
-    include: { roles: true },
-  });
-  return serialize(ws);
+  return prisma.workspace.update({ where: { id: ws.id }, data: updateData });
 }
 
-module.exports = { list, getByExternal, create, updateByExternal };
+module.exports = { getOrCreateByPlatform, updateWorkspace };
