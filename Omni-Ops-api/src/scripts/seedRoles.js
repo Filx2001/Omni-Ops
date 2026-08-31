@@ -22,7 +22,8 @@ async function main() {
     create: { platform: "DISCORD", workspaceId, organizationName: "Omni-Ops Demo" },
   });
 
-  for (const role of DEFAULT_ROLES) {
+  // FIX: Changed DEFAULT_ROLES to roles
+  for (const role of roles) {
     await prisma.role.upsert({
       where: { workspaceId_name: { workspaceId: workspace.id, name: role.name } },
       update: {},

@@ -36,7 +36,7 @@ async function checkScheduleConflict(
   if (!externalIds || externalIds.length === 0) return null;
   try {
     // 1. Fetch employees to map platform IDs → database IDs
-    const employeesResponse = await axios.get(`${process.env.API_URL}/employees`);
+    const employeesResponse = await axios.get(`/employees`);
     const employees = employeesResponse.data;
     const targetEmployees = employees.filter((emp) => externalIds.includes(emp.externalId));
     const targetEmployeeIds = targetEmployees.map((emp) => emp.id);
@@ -56,7 +56,7 @@ async function checkScheduleConflict(
     }
 
     // 2. Appointment conflicts
-    const appointmentsResponse = await axios.get(`${process.env.API_URL}/calendar/appointments`);
+    const appointmentsResponse = await axios.get(`/calendar/appointments`);
     const overlappingAppointment = appointmentsResponse.data.find((a) => {
       if (excludeAppointmentId && a.id === excludeAppointmentId) return false;
       if (!targetEmployeeIds.includes(a.assigneeId)) return false;
@@ -75,7 +75,7 @@ async function checkScheduleConflict(
     }
 
     // 3. Event conflicts
-    const eventsResponse = await axios.get(`${process.env.API_URL}/calendar/events`);
+    const eventsResponse = await axios.get(`/calendar/events`);
     const overlappingEvent = eventsResponse.data.find((e) => {
       if (excludeEventId && e.id === excludeEventId) return false;
       const involvesTarget = targetNames.some(

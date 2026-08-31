@@ -7,7 +7,7 @@ const instance = axios.create({
 });
 
 instance.interceptors.request.use((config) => {
-  config.headers["X-Internal-Key"] = process.env.INTERNAL_API_KEY;
+  config.headers["x-api-key"] = process.env.INTERNAL_API_KEY;
   const workspaceId = getTenant();
   if (workspaceId) config.headers["X-Workspace-Id"] = workspaceId;
   return config;
