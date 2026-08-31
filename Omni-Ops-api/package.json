@@ -4,7 +4,7 @@
   "description": "",
   "main": "index.js",
   "scripts": {
-    "start": "prisma migrate deploy && node src/app.js",
+    "start": "npx prisma db push && node src/app.js",
     "dev": "nodemon src/app.js",
     "postinstall": "prisma generate",
     "format": "npx prettier --write \"src/**/*.js\"",
