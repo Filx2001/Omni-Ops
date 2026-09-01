@@ -41,7 +41,6 @@ async function getByExternal(platform, workspaceId) {
 async function create({ platform = "DISCORD", workspaceId, organizationName }) {
   const existing = await getByExternal(platform, workspaceId);
   if (existing) return existing;
-
   try {
     const ws = await prisma.workspace.create({
       data: {
@@ -63,7 +62,6 @@ async function create({ platform = "DISCORD", workspaceId, organizationName }) {
 async function updateByExternal(platform, workspaceId, data) {
   let ws = await getByExternal(platform, workspaceId);
   if (!ws) ws = await create({ platform, workspaceId });
-
   const updateData = { ...data };
   if (data.aiApiKey !== undefined) {
     updateData.aiApiKey = data.aiApiKey === null ? null : encrypt(data.aiApiKey);
