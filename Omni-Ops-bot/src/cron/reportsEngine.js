@@ -2,6 +2,7 @@ const cron = require("node-cron");
 const axios = require("../utils/axiosInstance");
 const { EmbedBuilder } = require("discord.js");
 const { runWithTenant } = require("../utils/tenantContext");
+const { isValidTimeZone } = require("../utils/dateParser");
 
 function startDailyReport(client) {
   // Run every hour to check if any workspace is currently at 8:00 AM local time
@@ -11,7 +12,7 @@ function startDailyReport(client) {
       const workspaces = wsRes.data || [];
 
       for (const ws of workspaces) {
-        const tz = ws.timezone || "UTC";
+        const tz = isValidTimeZone(ws.timezone) ? ws.timezone : "UTC";
         const currentHour = parseInt(
           new Date().toLocaleString("en-US", { hour: "2-digit", hour12: false, timeZone: tz }),
           10

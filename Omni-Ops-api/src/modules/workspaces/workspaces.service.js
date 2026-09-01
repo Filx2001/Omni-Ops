@@ -1,7 +1,6 @@
 const prisma = require("../../prisma");
 const crypto = require("crypto");
 
-/* ---------- Crypto helper (unchanged) ---------- */
 function encrypt(text) {
   if (!text || !process.env.SECRET_ENCRYPTION_KEY) return text;
   const iv = crypto.randomBytes(16);
@@ -15,7 +14,6 @@ function encrypt(text) {
   return `${iv.toString("hex")}:${encrypted}`;
 }
 
-/* ---------- Internal helper ---------- */
 async function seedDefaultRoles(workspaceId) {
   const defaultRoles = [
     { name: "Admin", description: "Full system access" },
@@ -30,21 +28,16 @@ async function seedDefaultRoles(workspaceId) {
   }
 }
 
-/* ---------- NEW contract (used by workspaces.routes.js) ---------- */
-
-// GET /workspaces — list all (bot cron engines)
 async function list() {
   return prisma.workspace.findMany();
 }
 
-// GET /workspaces/:platform/:workspaceId — null if not found (bot onboarding relies on 404)
 async function getByExternal(platform, workspaceId) {
   return prisma.workspace.findUnique({
     where: { platform_workspaceId: { platform, workspaceId } },
   });
 }
 
-// POST /workspaces — idempotent create + seed default roles
 async function create({ platform = "DISCORD", workspaceId, organizationName }) {
   const existing = await getByExternal(platform, workspaceId);
   if (existing) return existing;
@@ -62,13 +55,11 @@ async function create({ platform = "DISCORD", workspaceId, organizationName }) {
     await seedDefaultRoles(ws.id);
     return ws;
   } catch (err) {
-    // Race condition: another request created it first (unique constraint)
     if (err?.code === "P2002") return getByExternal(platform, workspaceId);
     throw err;
   }
 }
 
-// PATCH /workspaces/discord/:workspaceId — upsert + encrypt secrets
 async function updateByExternal(platform, workspaceId, data) {
   let ws = await getByExternal(platform, workspaceId);
   if (!ws) ws = await create({ platform, workspaceId });
@@ -80,7 +71,6 @@ async function updateByExternal(platform, workspaceId, data) {
   return prisma.workspace.update({ where: { id: ws.id }, data: updateData });
 }
 
-/* ---------- Legacy aliases (so other modules/middleware keep working) ---------- */
 const getOrCreateByPlatform = (platform, workspaceId, guildName = null) =>
   create({ platform, workspaceId, organizationName: guildName });
 
