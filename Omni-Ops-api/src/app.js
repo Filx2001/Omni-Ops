@@ -26,6 +26,8 @@ app.use((req, res, next) => {
   if (
     req.path === "/crm/whatsapp/webhook" ||
     req.path === "/crm/inbox/callback" ||
+    req.path === "/google/connect" ||
+    req.path === "/google/callback" ||
     (process.env.NODE_ENV !== "production" && req.path === "/crm/whatsapp/test")
   ) {
     return next(); // Meta requests carry no internal key
@@ -35,6 +37,9 @@ app.use((req, res, next) => {
 
 // 2) Workspace management — not scoped (this is how workspaces are created/found)
 app.use("/workspaces", require("./modules/workspaces/workspaces.routes"));
+
+// 2.5) Google OAuth — public endpoints (browser + Google call these)
+app.use("/google", require("./modules/google/google.routes"));
 
 // 3) Tenant scoping — every business module below sees req.workspace
 app.use(requireWorkspace);

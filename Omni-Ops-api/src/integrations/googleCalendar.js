@@ -1,4 +1,23 @@
 const { google } = require("googleapis");
+const googleAuth = require("./googleAuth");
+
+// Per-tenant calendar when eventData.workspaceId is present, host fallback otherwise
+async function resolveClient(eventData) {
+  if (eventData?.workspaceId) {
+    const ctx = await googleAuth.getAuthForWorkspace(eventData.workspaceId);
+    if (ctx?.auth) {
+      return {
+        client: google.calendar({ version: "v3", auth: ctx.auth }),
+        calendarId:
+          eventData.calendarId || ctx.ws?.googleCalendarId || process.env.GOOGLE_CALENDAR_ID,
+      };
+    }
+  }
+  const client = getClient();
+  return client
+    ? { client, calendarId: eventData.calendarId || process.env.GOOGLE_CALENDAR_ID }
+    : null;
+}
 
 const SCOPES = ["https://www.googleapis.com/auth/calendar"];
 
@@ -38,11 +57,11 @@ function getSafeDateStr(d, tzOffsetHours = 0) {
 }
 
 async function addEventToGoogle(eventData) {
-  const client = getClient();
-  if (!client) return null;
-
+  const resolved = await resolveClient(eventData);
+  if (!resolved) return null;
+  const client = resolved.client;
   try {
-    const mainCalendarId = eventData.calendarId || process.env.GOOGLE_CALENDAR_ID;
+    const mainCalendarId = resolved.calendarId;
     if (!mainCalendarId) {
       console.warn("[Google] GOOGLE_CALENDAR_ID not set. Skipping event creation.");
       return null;
@@ -122,11 +141,11 @@ async function addEventToGoogle(eventData) {
 }
 
 async function deleteEventFromGoogle(eventData) {
-  const client = getClient();
-  if (!client) return 0;
-
+  const resolved = await resolveClient(eventData);
+  if (!resolved) return 0;
+  const client = resolved.client;
   try {
-    const mainCalendarId = eventData.calendarId || process.env.GOOGLE_CALENDAR_ID;
+    const mainCalendarId = resolved.calendarId;
     if (!mainCalendarId) return 0;
 
     const calendarsToSearch = [mainCalendarId];

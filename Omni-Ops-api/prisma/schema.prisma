@@ -35,6 +35,14 @@ model Workspace {
   // Tenant-level secrets (encrypted by the app layer, optional)
   aiApiKey String?
 
+  // Per-tenant Google connection (OAuth, encrypted refresh token)
+  googleEmail           String?
+  googleRefreshToken    String?
+  googleCalendarId      String?
+  googleLeadsSheetId    String?
+  googleAccountingSheetId String?
+  googlePersonalSheetId String?
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 

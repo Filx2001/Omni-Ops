@@ -63,6 +63,11 @@ async function buildPanel(interaction, ws) {
       { name: "🌍 Timezone", value: ws.timezone || "UTC", inline: true },
       { name: "💱 Currency", value: ws.currency || "USD", inline: true },
       { name: "🤖 AI Key", value: ws.hasAiKey ? "✅ Set" : "❌ Not set (optional)", inline: true },
+      {
+        name: "🔗 Google",
+        value: ws.googleEmail ? `✅ ${ws.googleEmail}` : "❌ Not connected",
+        inline: true,
+      },
       { name: "📢 Leads", value: ch(ws.leadsChannelId), inline: true },
       { name: "📅 Schedule", value: ch(ws.scheduleChannelId), inline: true },
       { name: "💰 Billing", value: ch(ws.billingChannelId), inline: true },
@@ -83,7 +88,8 @@ async function buildPanel(interaction, ws) {
     btn("cfg_org", "🏢 Name", ButtonStyle.Secondary),
     btn("cfg_tz", "🌍 Timezone", ButtonStyle.Secondary),
     btn("cfg_cur", "💱 Currency", ButtonStyle.Secondary),
-    btn("cfg_ai", "🤖 AI Key", ButtonStyle.Secondary)
+    btn("cfg_ai", "🤖 AI Key", ButtonStyle.Secondary),
+    btn("cfg_google", "🔗 Google", ButtonStyle.Success)
   );
   const row2 = new ActionRowBuilder().addComponents(
     btn("cfg_ch_leads", "📢 Leads", ButtonStyle.Primary),
@@ -322,6 +328,19 @@ module.exports = {
           .addOptions(...TIMEZONE_OPTIONS);
         panel.components.push(new ActionRowBuilder().addComponents(select));
         return interaction.update(panel);
+      }
+      if (id === "cfg_google") {
+        const url = `${process.env.API_PUBLIC_URL}/google/connect?ws=${interaction.guildId}`;
+        return interaction.reply({
+          content:
+            "🔗 Connect your Google account — the bot will auto-create your Sheets & Calendar:",
+          components: [
+            new ActionRowBuilder().addComponents(
+              new ButtonBuilder().setLabel("Connect Google").setStyle(ButtonStyle.Link).setURL(url)
+            ),
+          ],
+          flags: MessageFlags.Ephemeral,
+        });
       }
       if (id === "cfg_cur")
         return interaction.showModal(
