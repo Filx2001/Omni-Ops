@@ -165,10 +165,13 @@ module.exports = {
         const roleName = interaction.options.getString("role");
 
         const rolesResponse = await axios.get(`/roles`);
-        const role = rolesResponse.data.find((r) => r.name === roleName);
+        let role = rolesResponse.data.find((r) => r.name === roleName);
 
         if (!role) {
-          return interaction.editReply("❌ Role not found.");
+          // Role doesn't exist in this workspace yet → create it on the fly (plug & play)
+          const created = await axios.post(`/roles`, { name: roleName });
+          role = created.data;
+          clearCache("roles_list");
         }
 
         const response = await axios.post(`/employees`, {
@@ -306,9 +309,7 @@ module.exports = {
         const selectedEmployee = interaction.options.getString("employee");
 
         // Changed endpoint to use externalId
-        const requesterResponse = await axios.get(
-          `/employees/external/${interaction.user.id}`
-        );
+        const requesterResponse = await axios.get(`/employees/external/${interaction.user.id}`);
         const requester = requesterResponse.data;
 
         let employee;
@@ -328,9 +329,7 @@ module.exports = {
           employee = requester;
         }
 
-        const tasksResponse = await axios.get(
-          `/tasks/employee/${employee.id}`
-        );
+        const tasksResponse = await axios.get(`/tasks/employee/${employee.id}`);
         const tasks = tasksResponse.data;
 
         const total = tasks.length;
@@ -383,9 +382,7 @@ module.exports = {
           return interaction.editReply("❌ Employee not found.");
         }
 
-        const tasksResponse = await axios.get(
-          `/tasks/employee/${employee.id}`
-        );
+        const tasksResponse = await axios.get(`/tasks/employee/${employee.id}`);
         const tasks = tasksResponse.data;
 
         const total = tasks.length;
@@ -420,9 +417,7 @@ module.exports = {
 
       let isCurrentAdmin = false;
       try {
-        const empCheck = await axios.get(
-          `/employees/external/${interaction.user.id}`
-        );
+        const empCheck = await axios.get(`/employees/external/${interaction.user.id}`);
         if (empCheck.data?.role?.name === "Admin") {
           isCurrentAdmin = true;
         }
@@ -508,10 +503,7 @@ module.exports = {
           return interaction.editReply("⚠️ Please provide at least one field to update.");
         }
 
-        const response = await axios.patch(
-          `/employees/${employeeId}`,
-          updateData
-        );
+        const response = await axios.patch(`/employees/${employeeId}`, updateData);
 
         clearCache("employees_list");
 
@@ -535,9 +527,7 @@ module.exports = {
       await interaction.deferReply();
       try {
         const employeeId = interaction.options.getString("employee");
-        const response = await axios.patch(
-          `/employees/${employeeId}/deactivate`
-        );
+        const response = await axios.patch(`/employees/${employeeId}/deactivate`);
 
         clearCache("employees_list");
 
