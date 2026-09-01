@@ -1,5 +1,6 @@
 const { getTenant } = require("./tenantContext");
 const { getCachedWorkspaceSync } = require("./workspace");
+
 // ───────────────────────── Timezone validation ─────────────────────────
 function isValidTimeZone(tz) {
   if (!tz || typeof tz !== "string") return false;
@@ -11,21 +12,7 @@ function isValidTimeZone(tz) {
   }
 }
 
-// Never let an invalid timezone crash a parser
-function safeTz(timeZone) {
-  return isValidTimeZone(timeZone) ? timeZone : resolveTimeZone();
-}
 // ───────────────────────── Timezone helpers (multi-tenant aware) ─────────────────────────
-function isValidTimeZone(tz) {
-  if (!tz || typeof tz !== "string") return false;
-  try {
-    new Intl.DateTimeFormat("en-US", { timeZone: tz });
-    return true;
-  } catch {
-    return false;
-  }
-}
-
 function resolveTimeZone() {
   const guildId = getTenant();
   if (guildId) {
@@ -95,7 +82,6 @@ function todayStringInTz(timeZone, addDays = 0) {
 }
 
 // ───────────────────────── Smart day/month extraction ─────────────────────────
-// Figures out day & month regardless of order (DD/MM vs MM/DD)
 function smartDate(p1, p2, isYearFirst = false) {
   const n1 = parseInt(p1, 10);
   const n2 = parseInt(p2, 10);
@@ -121,7 +107,7 @@ function smartDate(p1, p2, isYearFirst = false) {
 }
 
 // ───────────────────────── Date + time parser (events/appointments) ─────────────────────────
-function parseDate(input, timeZone = null) {
+function parseDateTime(input, timeZone = null) {
   const tz = safeTz(timeZone);
   if (!input) return null;
   const now = new Date();
@@ -202,7 +188,6 @@ function parseDate(input, timeZone = null) {
 }
 
 // ───────────────────────── Wall-clock parser with AM/PM (appointments) ─────────────────────────
-// Interprets "2:30 pm" on a given date in the workspace timezone.
 function parseLocalDateTime(dateInput, timeInput, timeZone = null) {
   const tz = safeTz(timeZone);
   if (!dateInput) return null;
@@ -210,7 +195,6 @@ function parseLocalDateTime(dateInput, timeInput, timeZone = null) {
   let dateStr = "";
   const lowerDate = dateInput.trim().toLowerCase();
 
-  // 1. Resolve the date part
   if (lowerDate === "today") {
     dateStr = todayStringInTz(tz);
   } else if (lowerDate === "tomorrow") {
@@ -219,12 +203,10 @@ function parseLocalDateTime(dateInput, timeInput, timeZone = null) {
     const separator = lowerDate.includes("/") ? "/" : "-";
     const parts = lowerDate.split(separator);
     if (parts[0].length === 4) {
-      // YYYY-MM-DD (model format)
       const year = parts[0];
       const { day, month } = smartDate(parts[1], parts[2], false);
       dateStr = `${year}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
     } else {
-      // DD/MM or DD/MM/YYYY (user format)
       const p1 = parts[0];
       const p2 = parts[1];
       const year = parts.length === 3 ? parts[2] : currentYear;
@@ -233,13 +215,11 @@ function parseLocalDateTime(dateInput, timeInput, timeZone = null) {
     }
   }
 
-  // 2. All-day (no time provided)
   if (!timeInput) {
     const date = zonedDate(dateStr, 0, 0, tz);
     return date ? { date, isAllDay: true } : null;
   }
 
-  // 3. AM/PM → 24h
   let timeStr = timeInput.trim().toLowerCase();
   const isPM = timeStr.includes("pm");
   const isAM = timeStr.includes("am");
@@ -249,12 +229,11 @@ function parseLocalDateTime(dateInput, timeInput, timeZone = null) {
   if (isPM && hours < 12) hours += 12;
   if (isAM && hours === 12) hours = 0;
 
-  // 4. Combine date + time in the workspace timezone
   const finalDate = zonedDate(dateStr, hours, minutes, tz);
   return finalDate ? { date: finalDate, isAllDay: false } : null;
 }
 
-// Blocks dates far in the past (allows from the 1st of last month, for retroactive entries)
+// Blocks dates far in the past
 function isValidYear(dateInput) {
   if (!dateInput) return false;
   const inputDate = new Date(dateInput);
@@ -264,8 +243,7 @@ function isValidYear(dateInput) {
   return inputDate >= earliest;
 }
 
-// Parses series day syntax: "1-15" or "1,3,7" + optional month/year: "1-15/8" or "1,3,7/8/2026"
-// Returns an array of "d/m/yyyy" strings, or null on invalid syntax
+// Parses series day syntax
 function parseSeriesDates(input) {
   if (!input) return null;
   const clean = input.trim().replace(/\s+/g, "");
