@@ -10,8 +10,20 @@ function formatDate(date) {
   return new Date(date).toLocaleDateString("en-GB");
 }
 
-// Personal tasks = Manager assigned to themselves -> No DM or schedule channel broadcast
+// Personal tasks = Manager assigned to themselves -> No schedule channel broadcast
 const isPersonal = (task) => Boolean(task?.assignedToId) && task.assignedToId === task.createdById;
+
+// Resolves the assignee's Discord ID even if the API response didn't include the relation
+async function resolveAssigneeExternalId(task) {
+  if (task?.assignedTo?.externalId) return task.assignedTo.externalId;
+  if (!task?.assignedToId) return null;
+  try {
+    const res = await axios.get(`/employees`);
+    return res.data.find((e) => e.id === task.assignedToId)?.externalId || null;
+  } catch {
+    return null;
+  }
+}
 
 module.exports = {
   data: new SlashCommandBuilder()
@@ -158,9 +170,7 @@ module.exports = {
     if (subcommand === "create") {
       await interaction.deferReply({ ephemeral: true });
       try {
-        const employeeResponse = await axios.get(
-          `/employees/external/${interaction.user.id}`
-        );
+        const employeeResponse = await axios.get(`/employees/external/${interaction.user.id}`);
         const creator = employeeResponse.data;
         if (!["Admin", "Manager"].includes(creator.role?.name)) {
           return interaction.editReply("❌ Management only.");
@@ -208,11 +218,12 @@ module.exports = {
         const task = response.data;
         clearCache("all_tasks");
 
-        // Notify assigned employee
-        if (!isPersonal(task) && task.assignedTo?.externalId) {
+        // Notify assigned employee (uses the employee record we already fetched,
+        // and DMs even self-assigned tasks so it matches /appointment behavior)
+        if (assignedEmployee?.externalId) {
           await notifyTask(
             interaction.client,
-            task.assignedTo.externalId,
+            assignedEmployee.externalId,
             "create",
             task,
             interaction.user.id
@@ -263,16 +274,12 @@ module.exports = {
         const taskId = interaction.options.getString("task");
 
         // Update protection: Employees can only update their own tasks, Managers can update any
-        const employeeResponse = await axios.get(
-          `/employees/external/${interaction.user.id}`
-        );
+        const employeeResponse = await axios.get(`/employees/external/${interaction.user.id}`);
         const currentEmployee = employeeResponse.data;
         const isManager = ["Admin", "Manager"].includes(currentEmployee.role?.name);
 
         if (!isManager) {
-          const myTasksResponse = await axios.get(
-            `/tasks/employee/${currentEmployee.id}`
-          );
+          const myTasksResponse = await axios.get(`/tasks/employee/${currentEmployee.id}`);
           const ownsTask = myTasksResponse.data.some((t) => t.id === taskId);
           if (!ownsTask) {
             return interaction.editReply("❌ You can only update the status of your own tasks.");
@@ -350,13 +357,9 @@ module.exports = {
     } else if (subcommand === "stats") {
       await interaction.deferReply();
       try {
-        const employeeResponse = await axios.get(
-          `/employees/external/${interaction.user.id}`
-        );
+        const employeeResponse = await axios.get(`/employees/external/${interaction.user.id}`);
         const employee = employeeResponse.data;
-        const tasksResponse = await axios.get(
-          `/tasks/employee/${employee.id}`
-        );
+        const tasksResponse = await axios.get(`/tasks/employee/${employee.id}`);
         const tasks = tasksResponse.data;
 
         const total = tasks.length;
@@ -387,9 +390,7 @@ module.exports = {
     } else if (subcommand === "overdue") {
       await interaction.deferReply();
       try {
-        const employeeResponse = await axios.get(
-          `/employees/external/${interaction.user.id}`
-        );
+        const employeeResponse = await axios.get(`/employees/external/${interaction.user.id}`);
         const currentEmployee = employeeResponse.data;
         if (!["Admin", "Manager"].includes(currentEmployee.role?.name)) {
           return interaction.editReply("❌ Management only.");
@@ -406,9 +407,7 @@ module.exports = {
 
         const overdueTasks = [];
         for (const employee of filteredEmployees) {
-          const tasksResponse = await axios.get(
-            `/tasks/employee/${employee.id}`
-          );
+          const tasksResponse = await axios.get(`/tasks/employee/${employee.id}`);
           const tasks = tasksResponse.data;
           tasks
             .filter((task) => {
@@ -457,9 +456,7 @@ module.exports = {
     } else if (subcommand === "delete") {
       await interaction.deferReply({ ephemeral: true });
       try {
-        const employeeResponse = await axios.get(
-          `/employees/external/${interaction.user.id}`
-        );
+        const employeeResponse = await axios.get(`/employees/external/${interaction.user.id}`);
         const employee = employeeResponse.data;
         if (!["Admin", "Manager"].includes(employee.role?.name)) {
           return interaction.editReply("❌ Management only.");
@@ -478,13 +475,12 @@ module.exports = {
 
         await interaction.editReply({ embeds: [embed] });
 
-        // Notify on task deletion
-        if (!isPersonal(task) && task.assignedTo?.externalId) {
+        if (!isPersonal(response.data) && response.data.assignedTo?.externalId) {
           await notifyTask(
             interaction.client,
-            task.assignedTo.externalId,
-            "delete",
-            task,
+            response.data.assignedTo.externalId,
+            "update",
+            response.data,
             interaction.user.id
           );
         }
@@ -500,9 +496,7 @@ module.exports = {
       await interaction.deferReply({ ephemeral: true });
       try {
         // Edit protection: Managers only
-        const employeeResponse = await axios.get(
-          `/employees/external/${interaction.user.id}`
-        );
+        const employeeResponse = await axios.get(`/employees/external/${interaction.user.id}`);
         const currentEmployee = employeeResponse.data;
         if (!["Admin", "Manager"].includes(currentEmployee.role?.name)) {
           return interaction.editReply("❌ Management only. You cannot edit task details.");
@@ -561,10 +555,11 @@ module.exports = {
 
         await interaction.editReply({ embeds: [embed] });
 
-        if (!isPersonal(response.data) && response.data.assignedTo?.externalId) {
+        const editExternalId = await resolveAssigneeExternalId(response.data);
+        if (editExternalId) {
           await notifyTask(
             interaction.client,
-            response.data.assignedTo.externalId,
+            editExternalId,
             "update",
             response.data,
             interaction.user.id
@@ -583,16 +578,12 @@ module.exports = {
       const taskId = interaction.options.getString("task");
       try {
         // Must be a manager, or the task must be assigned to the requester
-        const employeeResponse = await axios.get(
-          `/employees/external/${interaction.user.id}`
-        );
+        const employeeResponse = await axios.get(`/employees/external/${interaction.user.id}`);
         const currentEmployee = employeeResponse.data;
         const isManager = ["Admin", "Manager"].includes(currentEmployee.role?.name);
 
         if (!isManager) {
-          const myTasksResponse = await axios.get(
-            `/tasks/employee/${currentEmployee.id}`
-          );
+          const myTasksResponse = await axios.get(`/tasks/employee/${currentEmployee.id}`);
           const ownsTask = myTasksResponse.data.some((t) => t.id === taskId);
           if (!ownsTask) {
             return interaction.editReply("❌ You can only view the history of your own tasks.");
