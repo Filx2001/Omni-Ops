@@ -1,20 +1,11 @@
-const { runWithTenant } = require("../utils/tenantContext");
-const configPanel = require("../commands/config");
-
 module.exports = {
   name: "interactionCreate",
   async execute(interaction) {
-    // Attach the guild's workspace to every API call made inside this interaction
-    const run = (fn) => (interaction.guildId ? runWithTenant(interaction.guildId, fn) : fn());
-
-    // 1. Modals
+    // ───────────────────────── 1. MODALS ─────────────────────────
     if (interaction.isModalSubmit()) {
-      // Control panel modals
-      if (interaction.customId.startsWith("cfg_")) {
-        return run(() => configPanel.handleComponent(interaction));
-      }
-      // Existing lead modals (kept)
       const leadCommand = interaction.client.commands.get("lead");
+
+      // Lead Modals
       if (interaction.customId === "filterModal") {
         if (leadCommand?.handleFilterModal) {
           await leadCommand.handleFilterModal(interaction);
@@ -27,20 +18,52 @@ module.exports = {
         }
         return;
       }
+
+      // Config Modals (Org, Timezone, Currency, AI Key)
+      if (interaction.customId.startsWith("cfg_modal_")) {
+        const configCommand = interaction.client.commands.get("config");
+        if (configCommand?.handleComponent) {
+          try {
+            await configCommand.handleComponent(interaction);
+          } catch (error) {
+            console.error("Config modal error:", error);
+          }
+        }
+        return;
+      }
       return;
     }
 
-    // 2. Control panel buttons
-    if (interaction.isButton() && interaction.customId?.startsWith("cfg_")) {
-      return run(() => configPanel.handleComponent(interaction));
+    // ───────────────────────── 2. BUTTONS & DROPDOWNS ─────────────────────────
+    if (interaction.isMessageComponent() || interaction.isAnySelectMenu()) {
+      // Route all config interactions (buttons starting with cfg_ and the timezone dropdown)
+      if (interaction.customId?.startsWith("cfg_")) {
+        const configCommand = interaction.client.commands.get("config");
+        if (configCommand?.handleComponent) {
+          try {
+            await configCommand.handleComponent(interaction);
+          } catch (error) {
+            console.error("Config component error:", error);
+            if (!interaction.replied && !interaction.deferred) {
+              await interaction
+                .reply({ content: "❌ Something went wrong updating settings.", ephemeral: true })
+                .catch(() => {});
+            }
+          }
+        }
+        return;
+      }
+
+      // (If you have other commands with buttons later, you can route them here)
+      return;
     }
 
-    // 3. Autocomplete
+    // ───────────────────────── 3. AUTOCOMPLETE ─────────────────────────
     if (interaction.isAutocomplete()) {
       const command = interaction.client.commands.get(interaction.commandName);
       if (command?.autocomplete) {
         try {
-          await run(() => command.autocomplete(interaction));
+          await command.autocomplete(interaction);
         } catch (error) {
           console.error("Autocomplete error:", error);
         }
@@ -48,16 +71,16 @@ module.exports = {
       return;
     }
 
-    // 4. Slash commands
+    // ───────────────────────── 4. SLASH COMMANDS ─────────────────────────
     if (!interaction.isChatInputCommand()) return;
+
     const command = interaction.client.commands.get(interaction.commandName);
     if (!command) return;
 
     try {
-      await run(() => command.execute(interaction));
+      await command.execute(interaction);
     } catch (error) {
       console.error(error);
-      // Crash protection for expired interactions (kept)
       try {
         if (interaction.deferred || interaction.replied) {
           await interaction
