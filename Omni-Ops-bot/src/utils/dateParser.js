@@ -1,18 +1,43 @@
 const { getTenant } = require("./tenantContext");
 const { getCachedWorkspaceSync } = require("./workspace");
+// ───────────────────────── Timezone validation ─────────────────────────
+function isValidTimeZone(tz) {
+  if (!tz || typeof tz !== "string") return false;
+  try {
+    new Intl.DateTimeFormat("en-US", { timeZone: tz });
+    return true;
+  } catch {
+    return false;
+  }
+}
 
+// Never let an invalid timezone crash a parser
+function safeTz(timeZone) {
+  return isValidTimeZone(timeZone) ? timeZone : resolveTimeZone();
+}
 // ───────────────────────── Timezone helpers (multi-tenant aware) ─────────────────────────
-// Resolves the timezone for the current interaction:
-// 1) the workspace timezone (if cached for this guild)
-// 2) host-level DEFAULT_TIMEZONE env var
-// 3) UTC
+function isValidTimeZone(tz) {
+  if (!tz || typeof tz !== "string") return false;
+  try {
+    new Intl.DateTimeFormat("en-US", { timeZone: tz });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 function resolveTimeZone() {
   const guildId = getTenant();
   if (guildId) {
     const ws = getCachedWorkspaceSync(guildId);
-    if (ws?.timezone) return ws.timezone;
+    if (isValidTimeZone(ws?.timezone)) return ws.timezone;
   }
-  return process.env.DEFAULT_TIMEZONE || "UTC";
+  return isValidTimeZone(process.env.DEFAULT_TIMEZONE) ? process.env.DEFAULT_TIMEZONE : "UTC";
+}
+
+// Never let an invalid timezone crash a parser
+function safeTz(timeZone) {
+  return isValidTimeZone(timeZone) ? timeZone : resolveTimeZone();
 }
 
 // UTC offset (in minutes) of an IANA timezone at a given instant
@@ -58,9 +83,10 @@ function zonedDate(dateStr, hours, minutes, timeZone) {
 
 // "Today" as YYYY-MM-DD in a timezone, optionally shifted by N days
 function todayStringInTz(timeZone, addDays = 0) {
+  const tz = isValidTimeZone(timeZone) ? timeZone : "UTC";
   const d = new Date(Date.now() + addDays * 86400000);
   const fmt = new Intl.DateTimeFormat("en-CA", {
-    timeZone,
+    timeZone: tz,
     year: "numeric",
     month: "2-digit",
     day: "2-digit",
@@ -95,8 +121,8 @@ function smartDate(p1, p2, isYearFirst = false) {
 }
 
 // ───────────────────────── Date + time parser (events/appointments) ─────────────────────────
-function parseDateTime(input, timeZone = null) {
-  const tz = timeZone || resolveTimeZone();
+function parseDate(input, timeZone = null) {
+  const tz = safeTz(timeZone);
   if (!input) return null;
   const now = new Date();
   const currentYear = now.getFullYear();
@@ -143,7 +169,7 @@ function parseDateTime(input, timeZone = null) {
 
 // ───────────────────────── Date-only parser (tasks & filters) ─────────────────────────
 function parseDate(input, timeZone = null) {
-  const tz = timeZone || resolveTimeZone();
+  const tz = safeTz(timeZone);
   if (!input) return null;
   const currentYear = new Date().getFullYear();
   let dateStr = "";
@@ -178,7 +204,7 @@ function parseDate(input, timeZone = null) {
 // ───────────────────────── Wall-clock parser with AM/PM (appointments) ─────────────────────────
 // Interprets "2:30 pm" on a given date in the workspace timezone.
 function parseLocalDateTime(dateInput, timeInput, timeZone = null) {
-  const tz = timeZone || resolveTimeZone();
+  const tz = safeTz(timeZone);
   if (!dateInput) return null;
   const currentYear = new Date().getFullYear();
   let dateStr = "";
@@ -277,4 +303,5 @@ module.exports = {
   isValidYear,
   parseSeriesDates,
   resolveTimeZone,
+  isValidTimeZone,
 };

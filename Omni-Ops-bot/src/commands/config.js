@@ -7,12 +7,40 @@ const {
   ModalBuilder,
   TextInputBuilder,
   TextInputStyle,
+  StringSelectMenuBuilder,
   MessageFlags,
 } = require("discord.js");
 const axios = require("../utils/axiosInstance");
 const { getWorkspace, updateWorkspace } = require("../utils/workspace");
 const EMBED_COLORS = require("../utils/embedColors");
-
+const { isValidTimeZone } = require("../utils/dateParser");
+const TIMEZONE_OPTIONS = [
+  { label: "🌐 UTC (GMT)", value: "UTC" },
+  { label: "🇬🇧 London", value: "Europe/London" },
+  { label: "🇫 Paris", value: "Europe/Paris" },
+  { label: "🇩🇪 Berlin", value: "Europe/Berlin" },
+  { label: "🇹 Istanbul", value: "Europe/Istanbul" },
+  { label: "🇷🇺 Moscow", value: "Europe/Moscow" },
+  { label: "🇪 Cairo", value: "Africa/Cairo" },
+  { label: "🇦 Casablanca", value: "Africa/Casablanca" },
+  { label: "🇳🇬 Lagos", value: "Africa/Lagos" },
+  { label: "🇿 Johannesburg", value: "Africa/Johannesburg" },
+  { label: "🇸🇦 Riyadh", value: "Asia/Riyadh" },
+  { label: "🇶🇦 Qatar", value: "Asia/Qatar" },
+  { label: "🇦🇪 Dubai", value: "Asia/Dubai" },
+  { label: "🇯🇴 Amman", value: "Asia/Amman" },
+  { label: "🇱🇧 Beirut", value: "Asia/Beirut" },
+  { label: "🇮🇶 Baghdad", value: "Asia/Baghdad" },
+  { label: "🇮 Tehran", value: "Asia/Tehran" },
+  { label: "🇵🇰 Karachi", value: "Asia/Karachi" },
+  { label: "🇮 India", value: "Asia/Kolkata" },
+  { label: "🇸 Singapore", value: "Asia/Singapore" },
+  { label: "🇯🇵 Tokyo", value: "Asia/Tokyo" },
+  { label: "🇺🇸 New York", value: "America/New_York" },
+  { label: "🇺🇸 Los Angeles", value: "America/Los_Angeles" },
+  { label: "🇧 São Paulo", value: "America/Sao_Paulo" },
+  { label: "⌨️ Other (type manually)", value: "__other__" },
+];
 // The server owner IS the system owner — always derived live from Discord,
 // so ownership transfers automatically with the server.
 const isOwner = (i) => i.user.id === i.guild.ownerId;
@@ -177,8 +205,7 @@ module.exports = {
 
       let me;
       try {
-        me = (await axios.get(`/employees/external/${interaction.user.id}`))
-          .data;
+        me = (await axios.get(`/employees/external/${interaction.user.id}`)).data;
       } catch {}
 
       if (!me) {
@@ -283,16 +310,19 @@ module.exports = {
             "e.g. Acme Academy"
           )
         );
-      if (id === "cfg_tz")
-        return interaction.showModal(
-          modal(
-            "cfg_modal_tz",
-            "Timezone",
-            "tz",
-            "IANA timezone name",
-            "e.g. UTC, Europe/London, America/New_York"
-          )
-        );
+      if (id === "cfg_tz") {
+        const ws = await getWorkspace(interaction.guildId, {
+          create: true,
+          guildName: interaction.guild.name,
+        });
+        const panel = await buildPanel(interaction, ws);
+        const select = new StringSelectMenuBuilder()
+          .setCustomId("cfg_select_tz")
+          .setPlaceholder("🌍 Pick your timezone…")
+          .addOptions(...TIMEZONE_OPTIONS);
+        panel.components.push(new ActionRowBuilder().addComponents(select));
+        return interaction.update(panel);
+      }
       if (id === "cfg_cur")
         return interaction.showModal(
           modal("cfg_modal_cur", "Currency", "cur", "3-letter currency code", "e.g. USD, EUR, GBP")
@@ -327,14 +357,40 @@ module.exports = {
       return;
     }
 
+    // ---- Timezone dropdown ----
+    if (interaction.isStringSelectMenu() && interaction.customId === "cfg_select_tz") {
+      const value = interaction.values[0];
+      if (value === "__other__") {
+        return interaction.showModal(
+          modal(
+            "cfg_modal_tz",
+            "Timezone",
+            "tz",
+            "IANA timezone name",
+            "e.g. Asia/Qatar, Europe/London"
+          )
+        );
+      }
+      const ws = await updateWorkspace(interaction.guildId, { timezone: value });
+      return interaction.update(await buildPanel(interaction, ws));
+    }
+
     // ---- Modals ----
     if (interaction.isModalSubmit()) {
       const id = interaction.customId;
       let patch = null;
       if (id === "cfg_modal_org")
         patch = { organizationName: interaction.fields.getTextInputValue("org") };
-      if (id === "cfg_modal_tz")
-        patch = { timezone: interaction.fields.getTextInputValue("tz").trim() };
+      if (id === "cfg_modal_tz") {
+        const tz = interaction.fields.getTextInputValue("tz").trim();
+        if (!isValidTimeZone(tz)) {
+          return interaction.reply({
+            content: `❌ \`${tz}\` is not a valid IANA timezone. Use the dropdown or the format \`Asia/Qatar\`.`,
+            flags: MessageFlags.Ephemeral,
+          });
+        }
+        patch = { timezone: tz };
+      }
       if (id === "cfg_modal_cur")
         patch = { currency: interaction.fields.getTextInputValue("cur").trim().toUpperCase() };
       if (id === "cfg_modal_ai") {
