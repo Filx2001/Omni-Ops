@@ -44,7 +44,7 @@ async function syncEventToAccountingSheet(event) {
 
 async function removeRecordFromAccountingSheet(id) {
   try {
-    const prisma = require("../../prisma");
+    const prisma = require("../prisma");
     // find the workspace that owns this record (appointment or event)
     const appt = await prisma.appointment.findUnique({ where: { id } });
     const event = appt ? null : await prisma.event.findUnique({ where: { id } });
