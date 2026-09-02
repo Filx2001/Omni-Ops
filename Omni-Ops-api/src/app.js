@@ -54,6 +54,7 @@ app.use("/google", require("./modules/google/google.routes"));
 
 // 3) Tenant scoping — every business module below sees req.workspace
 app.use(requireWorkspace);
+app.use("/sheets", require("./modules/sheets/sheets.routes"));
 
 app.use("/employees", require("./modules/employees/employees.routes"));
 app.use("/roles", require("./modules/roles/roles.routes"));
