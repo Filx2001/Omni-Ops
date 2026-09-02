@@ -11,6 +11,17 @@ app.get("/health", (req, res) => {
   res.json({ status: "ok", service: "Omni-Ops API" });
 });
 
+// Public privacy policy page (required by Google to publish the OAuth app)
+app.get("/privacy", (req, res) => {
+  res.send(`<!doctype html><html><head><title>Omni-Ops Privacy Policy</title></head>
+  <body style="font-family:sans-serif;max-width:700px;margin:40px auto;line-height:1.6">
+  <h1>Omni-Ops Privacy Policy</h1>
+  <p>Omni-Ops is an open-source workspace management bot. We only store the data needed to run your workspace: the settings, employees, tasks, appointments, leads and invoices you create through the bot.</p>
+  <p>When you connect Google, we store an <b>encrypted</b> token so the bot can sync <b>your own</b> Sheets and Calendar. We never read, sell or share your data. You can revoke access at any time from your Google account settings — it stops instantly.</p>
+  <p>Contact: services2000026@gmail.com</p>
+  </body></html>`);
+});
+
 // Keep the raw body — Meta's webhook verifies its HMAC signature against it.
 // It must be the exact original buffer; JSON.stringify would not produce the same HMAC.
 app.use(
