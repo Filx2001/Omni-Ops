@@ -1,5 +1,9 @@
 const prisma = require("../../prisma");
 const { Resend } = require("resend");
+const {
+  syncInvoiceToAccountingSheet,
+  removeInvoiceFromAccountingSheet,
+} = require("../../integrations/accountingSheets");
 
 // Optional integration — the module works without it
 const resend = process.env.RESEND_API_KEY ? new Resend(process.env.RESEND_API_KEY) : null;
@@ -27,7 +31,7 @@ const InvoiceService = {
     const discountAmount = (discount / 100) * grossAmount;
     const netAmount = grossAmount - discountAmount;
 
-    return await prisma.invoice.create({
+    const invoice = await prisma.invoice.create({
       data: {
         workspaceId,
         customerName: data.customerName,
@@ -42,6 +46,13 @@ const InvoiceService = {
         issuedByName: data.issuedByName || null,
       },
     });
+
+    // Sync to Google Accounting Sheet
+    syncInvoiceToAccountingSheet(invoice).catch((err) =>
+      console.error("[Accounting] Invoice sync failed:", err.message)
+    );
+
+    return invoice;
   },
 
   // Supports search + totals, scoped to the workspace
@@ -81,7 +92,18 @@ const InvoiceService = {
   },
 
   async deleteInvoice(workspaceId, id) {
-    return await prisma.invoice.delete({ where: { id, workspaceId } });
+    // Fetch first so we have the invoiceNumber to remove it from the Google Sheet
+    const invoice = await prisma.invoice.findUnique({ where: { id, workspaceId } });
+    if (!invoice) throw new Error("Invoice not found");
+
+    await prisma.invoice.delete({ where: { id, workspaceId } });
+
+    // Remove from Google Accounting Sheet
+    removeInvoiceFromAccountingSheet(invoice).catch((err) =>
+      console.error("[Accounting] Invoice remove failed:", err.message)
+    );
+
+    return invoice;
   },
 
   async sendInvoiceEmail(workspace, invoiceId, clientEmail) {

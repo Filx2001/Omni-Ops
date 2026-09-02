@@ -1,82 +1,51 @@
 const googleAuth = require("./googleAuth");
 
 const sheetId = (ws) => ws?.googleAccountingSheetId || process.env.ACCOUNTING_SHEET_ID;
-const apptRow = (a) => [
-  a.id,
-  a.title || "",
-  a.assignee?.name || "",
-  a.day || "",
-  a.startTime ? new Date(a.startTime).toISOString() : "",
-  a.endTime ? new Date(a.endTime).toISOString() : "",
-  a.location || "",
-];
-const eventRow = (e) => [
-  e.id,
-  e.title || "",
-  e.type || "",
-  e.startDate ? new Date(e.startDate).toISOString() : "",
-  e.endDate ? new Date(e.endDate).toISOString() : "",
+const invoiceRow = (i) => [
+  `INV-${i.invoiceNumber ?? i.id}`,
+  i.customerName || "",
+  i.category || "",
+  i.description || "",
+  i.quantity ?? 1,
+  i.discount ?? 0,
+  i.netAmount ?? "",
+  i.status || "",
+  i.createdAt ? new Date(i.createdAt).toISOString() : "",
 ];
 
-async function append(workspaceId, tab, row) {
-  const ctx = await googleAuth.getAuthForWorkspace(workspaceId);
-  const id = sheetId(ctx?.ws);
-  if (!ctx?.auth || !id) return;
-  await googleAuth.appendRow(ctx.auth, id, tab, row);
-}
-
-async function syncAppointmentToAccountingSheet(appt) {
+async function syncInvoiceToAccountingSheet(invoice) {
   try {
-    await append(appt.workspaceId, "Appointments", apptRow(appt));
+    const ctx = await googleAuth.getAuthForWorkspace(invoice.workspaceId);
+    const id = sheetId(ctx?.ws);
+    if (!ctx?.auth || !id) return;
+    await googleAuth.appendRow(ctx.auth, id, "Invoices", invoiceRow(invoice));
   } catch (e) {
-    console.error("[Accounting] appt sync failed:", e.message);
-  }
-}
-const syncClassToAccountingSheet = syncAppointmentToAccountingSheet;
-
-async function syncEventToAccountingSheet(event) {
-  try {
-    await append(event.workspaceId, "Events", eventRow(event));
-  } catch (e) {
-    console.error("[Accounting] event sync failed:", e.message);
+    console.error("[Accounting] invoice sync failed:", e.message);
   }
 }
 
-async function removeRecordFromAccountingSheet(id) {
+async function removeInvoiceFromAccountingSheet(invoice) {
   try {
-    const prisma = require("../prisma");
-    // find the workspace that owns this record (appointment or event)
-    const appt = await prisma.appointment.findUnique({ where: { id } });
-    const event = appt ? null : await prisma.event.findUnique({ where: { id } });
-    const wsId = appt?.workspaceId || event?.workspaceId;
-    if (!wsId) return 0;
-    const ctx = await googleAuth.getAuthForWorkspace(wsId);
-    const sid = sheetId(ctx?.ws);
-    if (!ctx?.auth || !sid) return 0;
-    const a = await googleAuth.deleteRowByValue(ctx.auth, sid, "Appointments", 0, id);
-    const b = a ? 0 : await googleAuth.deleteRowByValue(ctx.auth, sid, "Events", 0, id);
-    return (a ? 1 : 0) + b;
+    const ctx = await googleAuth.getAuthForWorkspace(invoice.workspaceId);
+    const id = sheetId(ctx?.ws);
+    if (!ctx?.auth || !id) return;
+    const invoiceRef = `INV-${invoice.invoiceNumber ?? invoice.id}`;
+    await googleAuth.deleteRowByValue(ctx.auth, id, "Invoices", 0, invoiceRef);
   } catch (e) {
-    console.error("[Accounting] remove failed:", e.message);
-    return 0;
+    console.error("[Accounting] invoice remove failed:", e.message);
   }
 }
 
-async function backfillAccountingSheet(classes, events) {
+async function backfillAccountingSheet(invoices) {
   try {
-    const wsId = classes[0]?.workspaceId || events[0]?.workspaceId;
-    const ctx = await googleAuth.getAuthForWorkspace(wsId);
+    const ctx = await googleAuth.getAuthForWorkspace(invoices[0]?.workspaceId);
     const id = sheetId(ctx?.ws);
     if (!ctx?.auth || !id) return 0;
-    await googleAuth.rewriteTab(ctx.auth, id, "Appointments", [
-      googleAuth.APPT_HEADER,
-      ...classes.map(apptRow),
+    await googleAuth.rewriteTab(ctx.auth, id, "Invoices", [
+      googleAuth.INVOICE_HEADER,
+      ...invoices.map(invoiceRow),
     ]);
-    await googleAuth.rewriteTab(ctx.auth, id, "Events", [
-      googleAuth.EVENT_HEADER,
-      ...events.map(eventRow),
-    ]);
-    return classes.length + events.length;
+    return invoices.length;
   } catch (e) {
     console.error("[Accounting] backfill failed:", e.message);
     return 0;
@@ -84,9 +53,7 @@ async function backfillAccountingSheet(classes, events) {
 }
 
 module.exports = {
-  syncClassToAccountingSheet,
-  syncAppointmentToAccountingSheet,
-  syncEventToAccountingSheet,
-  removeRecordFromAccountingSheet,
+  syncInvoiceToAccountingSheet,
+  removeInvoiceFromAccountingSheet,
   backfillAccountingSheet,
 };

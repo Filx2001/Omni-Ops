@@ -6,12 +6,12 @@ const {
   deleteGoogleEventsByIds,
   syncEmailsToGoogle,
 } = require("../../integrations/googleCalendar");
-const accounting = require("../../integrations/accountingSheets");
-// Phase 7 will rename syncClassToAccountingSheet — accept either for now
-const syncAppointmentToAccountingSheet =
-  accounting.syncAppointmentToAccountingSheet || accounting.syncClassToAccountingSheet;
-const { syncEventToAccountingSheet, removeRecordFromAccountingSheet, backfillAccountingSheet } =
-  accounting;
+const {
+  syncAppointmentToScheduleSheet,
+  syncEventToScheduleSheet,
+  removeRecordFromScheduleSheet,
+  backfillScheduleSheet,
+} = require("../../integrations/scheduleSheets");
 const { zonedDate, dateStrInTz, weekdayInTz } = require("../../utils/timezone");
 
 // Fallback label when an appointment has no title
@@ -75,6 +75,7 @@ async function createEvent(workspace, data, options = {}) {
       endDate: newEvent.endDate,
       isAllDay: newEvent.isAllDay,
       targetEmails: validEmails,
+      workspaceId: workspace.id,
     });
     if (googleEventId?.id) {
       const withIds = await prisma.event.update({
@@ -89,9 +90,7 @@ async function createEvent(workspace, data, options = {}) {
   }
 
   if (!options.skipSheet) {
-    syncEventToAccountingSheet(newEvent).catch((err) =>
-      console.error("Accounting Sheet Error:", err)
-    );
+    syncEventToScheduleSheet(newEvent).catch((err) => console.error("Schedule Sheet Error:", err));
   }
   return newEvent;
 }
@@ -105,8 +104,8 @@ async function createEventsBulk(workspace, data) {
     created.push(await createEvent(workspace, { ...item, groupId }, { skipSheet: true }));
   }
   // One batched sheet sync instead of N parallel ones (Google rate limits)
-  backfillAccountingSheet([], created).catch((err) =>
-    console.error("Accounting Sheet Bulk Error:", err)
+  backfillScheduleSheet([], created).catch((err) =>
+    console.error("Schedule Sheet Bulk Error:", err)
   );
   return { groupId, created };
 }
@@ -155,14 +154,14 @@ async function updateEvent(workspace, id, data, scope = "single") {
     const oldEventTitle = oldAssigneeNames ? `${oldAssigneeNames} - ${ev.title}` : ev.title;
 
     if (ev.externalCalendarIds) {
-      await deleteGoogleEventsByIds(ev.externalCalendarIds).catch(() => {});
+      await deleteGoogleEventsByIds(ev.externalCalendarIds, workspace.id).catch(() => {});
     } else {
-      // Legacy events without stored ids — fall back to title matching
       try {
         await deleteEventFromGoogle({
           title: oldEventTitle,
           startDate: ev.startDate,
           targetEmails: oldEmails,
+          workspaceId: workspace.id,
         });
       } catch (err) {}
     }
@@ -217,6 +216,7 @@ async function updateEvent(workspace, id, data, scope = "single") {
         endDate: updated.endDate,
         isAllDay: updated.isAllDay,
         targetEmails: newEmails,
+        workspaceId: workspace.id,
       });
       if (reAdded?.id) {
         await prisma.event.update({
@@ -226,7 +226,7 @@ async function updateEvent(workspace, id, data, scope = "single") {
       }
     } catch (err) {}
 
-    syncEventToAccountingSheet(updated).catch((err) => console.error("Sheet Error:", err));
+    syncEventToScheduleSheet(updated).catch((err) => console.error("Sheet Error:", err));
     updatedEvents.push(updated);
   }
   return { events: updatedEvents, count: updatedEvents.length };
@@ -272,19 +272,20 @@ async function deleteEvent(workspace, id, scope = "single") {
     const eventTitle = assigneeNames ? `${assigneeNames} - ${ev.title}` : ev.title;
 
     if (ev.externalCalendarIds) {
-      await deleteGoogleEventsByIds(ev.externalCalendarIds).catch(() => {});
+      await deleteGoogleEventsByIds(ev.externalCalendarIds, workspace.id).catch(() => {});
     } else {
       try {
         await deleteEventFromGoogle({
           title: eventTitle,
           startDate: ev.startDate,
           targetEmails: emails,
+          workspaceId: workspace.id,
         });
       } catch (err) {}
     }
 
     await prisma.event.delete({ where: { id: ev.id } });
-    removeRecordFromAccountingSheet(ev.id).catch((err) => console.error("Sheet Error:", err));
+    removeRecordFromScheduleSheet(ev.id).catch((err) => console.error("Sheet Error:", err));
   }
   return { events: eventsToDelete, count: eventsToDelete.length };
 }
@@ -322,13 +323,14 @@ async function createAppointment(workspace, data) {
       endDate: newAppointment.endTime,
       isAllDay: newAppointment.isAllDay,
       targetEmails: validEmails,
+      workspaceId: workspace.id,
     });
   } catch (err) {
     console.error("[Google] Appointment sync failed:", err.message);
   }
 
-  syncAppointmentToAccountingSheet(newAppointment).catch((err) =>
-    console.error("[Accounting] Appointment sync failed:", err.message)
+  syncAppointmentToScheduleSheet(newAppointment).catch((err) =>
+    console.error("[Schedule] Appointment sync failed:", err.message)
   );
   return newAppointment;
 }
@@ -345,6 +347,7 @@ async function updateAppointment(workspace, id, data) {
         title: `${oldAppointment.assignee?.name || "TBA"} - 📅 Appointment: ${appointmentLabel(oldAppointment)}`,
         startDate: oldAppointment.startTime,
         targetEmails: oldEmails,
+        workspaceId: workspace.id,
       });
     } catch (err) {}
   }
@@ -370,6 +373,7 @@ async function updateAppointment(workspace, id, data) {
       endDate: updated.endTime,
       isAllDay: updated.isAllDay,
       targetEmails: validEmails,
+      workspaceId: workspace.id,
     });
   } catch (err) {}
 

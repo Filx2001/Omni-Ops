@@ -103,6 +103,17 @@ const LEADS_HEADER = ["Name", "Phone", "Email", "Source", "Status", "Created At"
 const APPT_HEADER = ["ID", "Title", "Assignee", "Day", "Start", "End", "Location"];
 const EVENT_HEADER = ["ID", "Title", "Type", "Start", "End"];
 const TASK_HEADER = ["ID", "Title", "Priority", "Due Date", "Status"];
+const INVOICE_HEADER = [
+  "Invoice #",
+  "Customer",
+  "Category",
+  "Description",
+  "Qty",
+  "Discount %",
+  "Net",
+  "Status",
+  "Date",
+];
 
 async function createSheet(auth, title, tabs) {
   const sheets = google.sheets({ version: "v4", auth });
@@ -151,14 +162,25 @@ async function provisionGoogleResources(workspaceId) {
   }
 
   try {
-    if (!ws.googleAccountingSheetId)
-      update.googleAccountingSheetId = await createSheet(
+    if (!ws.googleScheduleSheetId)
+      update.googleScheduleSheetId = await createSheet(
         ctx.auth,
-        `${ws.organizationName} — Accounting`,
+        `${ws.organizationName} — Schedule`,
         [
           { name: "Appointments", header: APPT_HEADER },
           { name: "Events", header: EVENT_HEADER },
         ]
+      );
+  } catch (e) {
+    console.error("[Google] schedule sheet provision failed:", e.message);
+  }
+
+  try {
+    if (!ws.googleAccountingSheetId)
+      update.googleAccountingSheetId = await createSheet(
+        ctx.auth,
+        `${ws.organizationName} — Accounting`,
+        [{ name: "Invoices", header: INVOICE_HEADER }]
       );
   } catch (e) {
     console.error("[Google] accounting sheet provision failed:", e.message);
@@ -250,4 +272,5 @@ module.exports = {
   APPT_HEADER,
   EVENT_HEADER,
   TASK_HEADER,
+  INVOICE_HEADER,
 };
