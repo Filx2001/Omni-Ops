@@ -144,11 +144,6 @@ module.exports = {
     )
     .addSubcommand((sub) =>
       sub.setName("sync").setDescription("Sync employee emails from database to Google Calendar")
-    )
-    .addSubcommand((sub) =>
-      sub
-        .setName("sync-sheet")
-        .setDescription("📊 Export all existing appointments & events to the accounting sheet")
     ),
 
   async execute(interaction) {
@@ -378,10 +373,7 @@ module.exports = {
           return interaction.editReply("⚠️ No changes provided.");
         }
 
-        const updRes = await axios.patch(
-          `/calendar/events/${eventId}?scope=${scope}`,
-          updateData
-        );
+        const updRes = await axios.patch(`/calendar/events/${eventId}?scope=${scope}`, updateData);
         clearCache("events_list");
 
         // One DM per affected employee, even if multiple days changed
@@ -432,30 +424,6 @@ module.exports = {
           );
         }
       }
-      // ========================= SYNC ACCOUNTING SHEET =========================
-      else if (subcommand === "sync-sheet") {
-        const manager = await requireRole(interaction, MANAGEMENT_ROLES);
-        if (!manager) return;
-        await interaction.editReply(
-          "⏳ Exporting all existing appointments & events to the accounting sheet... This might take a minute."
-        );
-        const response = await axios.post(`/calendar/accounting/backfill`);
-        const apptCount = response.data.appointments ?? response.data.classes ?? 0;
-        const eventCount = response.data.events ?? 0;
-        const rowsAdded = response.data.rowsAdded ?? 0;
-        const embed = new EmbedBuilder()
-          .setColor(EMBED_COLORS.SUCCESS || EMBED_COLORS.INFO)
-          .setTitle("📊 Accounting Sheet Sync Complete")
-          .setDescription(
-            `Scanned **${apptCount}** appointments and **${eventCount}** events.\n` +
-              (rowsAdded > 0
-                ? `✅ Added **${rowsAdded}** new rows to the sheet.`
-                : `ℹ️ Everything was already in the sheet — nothing to add.`)
-          )
-          .setFooter({ text: `Requested by ${manager.name}` })
-          .setTimestamp();
-        await interaction.editReply({ content: "", embeds: [embed] });
-      }
       // ========================= DELETE =========================
       else if (subcommand === "delete") {
         const manager = await requireRole(interaction, MANAGEMENT_ROLES);
@@ -468,9 +436,7 @@ module.exports = {
         if (scopeResult.error) return interaction.editReply(scopeResult.error);
         const scope = scopeResult.scope;
 
-        const delRes = await axios.delete(
-          `/calendar/events/${eventId}?scope=${scope}`
-        );
+        const delRes = await axios.delete(`/calendar/events/${eventId}?scope=${scope}`);
         clearCache("events_list");
 
         const affected = delRes.data?.events || [];

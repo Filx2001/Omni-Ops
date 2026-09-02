@@ -137,6 +137,19 @@ module.exports = {
             .setDescription("End date (e.g., 30/06, 30/06/2026, or tomorrow)")
             .setRequired(false)
         )
+    )
+    // =================================== invoice delete ===================================
+    .addSubcommand((sub) =>
+      sub
+        .setName("delete")
+        .setDescription("❌ Delete an invoice permanently")
+        .addStringOption((option) =>
+          option
+            .setName("invoice_id")
+            .setDescription("Invoice ID")
+            .setRequired(true)
+            .setAutocomplete(true)
+        )
     ),
 
   async execute(interaction) {
@@ -315,6 +328,27 @@ module.exports = {
           .setTimestamp();
 
         return interaction.editReply({ embeds: [embed] });
+      }
+      // =================================== invoice delete ===================================
+      else if (subcommand === "delete") {
+        const invoiceId = interaction.options.getString("invoice_id");
+        try {
+          await axios.delete(`/invoices/${invoiceId}`);
+          clearCache("invoices_list");
+          const embed = new EmbedBuilder()
+            .setColor(EMBED_COLORS.DELETE || "#e74c3c")
+            .setTitle("🗑️ Invoice Deleted")
+            .setDescription(
+              "The invoice has been permanently removed from the system and the accounting sheet."
+            )
+            .setTimestamp();
+          return interaction.editReply({ embeds: [embed] });
+        } catch (error) {
+          if (error.response?.status === 404) {
+            return interaction.editReply("❌ Invoice not found.");
+          }
+          throw error;
+        }
       }
       // =================================== invoice list ===================================
       else if (subcommand === "list") {

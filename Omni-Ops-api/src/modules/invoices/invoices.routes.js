@@ -68,7 +68,16 @@ router.post("/:id/send", async (req, res) => {
     res.status(500).json({ error: error.message });
   }
 });
-
+router.delete("/:id", async (req, res) => {
+  try {
+    const deleted = await InvoiceService.deleteInvoice(req.workspace.id, req.params.id);
+    res.json(deleted);
+  } catch (error) {
+    if (error.message === "Invoice not found")
+      return res.status(404).json({ error: error.message });
+    res.status(500).json({ error: error.message });
+  }
+});
 // Signed, expiring PDF link — verifies its own signature (no API key / workspace header needed)
 router.get("/:id/pdf", async (req, res) => {
   try {

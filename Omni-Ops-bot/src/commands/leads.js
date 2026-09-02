@@ -202,9 +202,6 @@ module.exports = {
               { name: "✍️ Other", value: "MANUAL" }
             )
         )
-    )
-    .addSubcommand((sub) =>
-      sub.setName("sync").setDescription("🔄 Rebuild the external leads sheet from the database")
     ),
 
   async execute(interaction) {
@@ -260,9 +257,7 @@ module.exports = {
     await interaction.deferReply({ ephemeral: true });
     try {
       // 1. Permission check
-      const employeeResponse = await axios.get(
-        `/employees/external/${interaction.user.id}`
-      );
+      const employeeResponse = await axios.get(`/employees/external/${interaction.user.id}`);
       const currentEmployee = employeeResponse.data;
       const allowedRoles = ["Admin", "Manager", "Sales", "Support", "Marketing"];
       if (!allowedRoles.includes(currentEmployee.role?.name)) {
@@ -271,12 +266,12 @@ module.exports = {
         );
       }
 
-      // Delete/edit/sync are sensitive (they permanently change customer data) —
+      // Delete/edit are sensitive (they permanently change customer data) —
       // restricted to management, not the read/follow-up permission set.
-      const MANAGEMENT_ONLY_SUBCOMMANDS = ["delete", "edit", "sync"];
+      const MANAGEMENT_ONLY_SUBCOMMANDS = ["delete", "edit"];
       const isManager = ["Admin", "Manager"].includes(currentEmployee.role?.name);
       if (MANAGEMENT_ONLY_SUBCOMMANDS.includes(subcommand) && !isManager) {
-        return interaction.editReply("❌ Only Management can delete, edit, or sync lead records.");
+        return interaction.editReply("❌ Only Management can delete, edit lead records.");
       }
 
       const response = await axios.get(`/crm/leads`);
@@ -413,10 +408,7 @@ module.exports = {
             (l.name && l.name.toLowerCase().includes(query.toLowerCase()))
         );
         if (!lead) return interaction.editReply(`❌ No lead found matching **${query}**.`);
-        const updateResponse = await axios.patch(
-          `/crm/leads/${lead.id}/assign`,
-          { employeeId }
-        );
+        const updateResponse = await axios.patch(`/crm/leads/${lead.id}/assign`, { employeeId });
         clearCache("leads_list");
         const updatedLead = updateResponse.data;
         const embed = new EmbedBuilder()
@@ -440,10 +432,9 @@ module.exports = {
         );
         if (!lead) return interaction.editReply(`❌ No lead found matching **${query}**.`);
         const oldStatus = lead.status;
-        const updateResponse = await axios.patch(
-          `/crm/leads/${lead.id}/status`,
-          { status: newStatus }
-        );
+        const updateResponse = await axios.patch(`/crm/leads/${lead.id}/status`, {
+          status: newStatus,
+        });
         clearCache("leads_list");
         const updatedLead = updateResponse.data;
         const embed = new EmbedBuilder()
@@ -481,31 +472,6 @@ module.exports = {
           )
           .setFooter({ text: "CRM Performance Analytics" })
           .setTimestamp();
-        return interaction.editReply({ embeds: [embed] });
-      }
-      // ========================== Sync ==========================
-      else if (subcommand === "sync") {
-        const response = await axios.post(`/crm/leads/sync`);
-        const { total, tabs, rows, clearedTabs } = response.data;
-        clearCache("leads_list");
-        const embed = new EmbedBuilder()
-          .setColor(EMBED_COLORS.SUCCESS || 0x00ff00)
-          .setTitle("🔄 Leads Sheet Rebuilt")
-          .setDescription("The external leads sheet now matches the database exactly.")
-          .addFields(
-            { name: "👥 Leads in database", value: `${total}`, inline: true },
-            { name: "📄 Tabs written", value: `${tabs}`, inline: true },
-            { name: "📝 Rows written", value: `${rows}`, inline: true }
-          )
-          .setFooter({ text: `Rebuilt by ${interaction.user.username}` })
-          .setTimestamp();
-        if (clearedTabs > 0) {
-          embed.addFields({
-            name: "🧹 Emptied tabs",
-            value: `${clearedTabs} tab(s) had no matching leads`,
-            inline: false,
-          });
-        }
         return interaction.editReply({ embeds: [embed] });
       }
       // ========================== Add ==========================
@@ -585,10 +551,7 @@ module.exports = {
             (l.name && l.name.toLowerCase().includes(query.toLowerCase()))
         );
         if (!lead) return interaction.editReply(`❌ No lead found matching **${query}**.`);
-        const updateResponse = await axios.patch(
-          `/crm/leads/${lead.id}/note`,
-          { note: content }
-        );
+        const updateResponse = await axios.patch(`/crm/leads/${lead.id}/note`, { note: content });
         clearCache("leads_list");
         const embed = new EmbedBuilder()
           .setColor(EMBED_COLORS.SUCCESS || 0x00ff00)
@@ -639,10 +602,7 @@ module.exports = {
         const updatePayload = {};
         if (newName) updatePayload.name = newName;
         if (newPhone) updatePayload.phone = newPhone;
-        const updateResponse = await axios.patch(
-          `/crm/leads/${lead.id}/edit`,
-          updatePayload
-        );
+        const updateResponse = await axios.patch(`/crm/leads/${lead.id}/edit`, updatePayload);
         clearCache("leads_list");
         const updatedLead = updateResponse.data;
         const embed = new EmbedBuilder()
@@ -717,9 +677,7 @@ module.exports = {
     const notes = interaction.fields.getTextInputValue("notes") || null;
     await interaction.deferReply({ ephemeral: true });
     try {
-      const employeeResponse = await axios.get(
-        `/employees/external/${interaction.user.id}`
-      );
+      const employeeResponse = await axios.get(`/employees/external/${interaction.user.id}`);
       const currentEmployee = employeeResponse.data;
       const allowedRoles = ["Admin", "Manager", "Sales", "Marketing"];
       if (!allowedRoles.includes(currentEmployee.role?.name)) {
