@@ -25,6 +25,7 @@ async function createTask(workspace, data) {
   if (!personal && task.assignedTo?.email && task.assignedTo.email.includes("@")) {
     validEmails.push(task.assignedTo.email);
   }
+
   if (task.dueDate) {
     try {
       await addEventToGoogle({
@@ -35,6 +36,7 @@ async function createTask(workspace, data) {
         isAllDay: true,
         targetEmails: validEmails,
         calendarId: calFor(task),
+        workspaceId: workspace.id,
       });
     } catch (error) {
       console.error("[Google] Task event sync failed:", error.message);
@@ -65,6 +67,7 @@ async function updateTaskStatus(workspace, id, status) {
     endOfDueDate = new Date(oldTask.dueDate);
     endOfDueDate.setHours(23, 59, 59, 999);
   }
+
   if (
     status !== "done" &&
     endOfDueDate &&
@@ -92,6 +95,7 @@ async function updateTaskStatus(workspace, id, status) {
         startDate: oldTask.dueDate,
         targetEmails: oldTask.assignedTo?.email ? [oldTask.assignedTo.email] : [],
         calendarId: calFor(oldTask),
+        workspaceId: workspace.id,
       });
     } catch (error) {}
   }
@@ -123,6 +127,7 @@ async function deleteTask(workspace, id) {
         startDate: task.dueDate,
         targetEmails: task.assignedTo?.email ? [task.assignedTo.email] : [],
         calendarId: calFor(task),
+        workspaceId: workspace.id,
       });
     } catch (error) {}
   }
@@ -159,6 +164,7 @@ async function updateTask(workspace, id, data) {
         startDate: oldTask.dueDate,
         targetEmails: oldTask.assignedTo?.email ? [oldTask.assignedTo.email] : [],
         calendarId: calFor(oldTask),
+        workspaceId: workspace.id,
       });
     } catch (error) {}
   }
@@ -174,6 +180,7 @@ async function updateTask(workspace, id, data) {
   if (!personal && task.assignedTo?.email && task.assignedTo.email.includes("@")) {
     validEmails.push(task.assignedTo.email);
   }
+
   if (task.dueDate && !["done", "cancelled"].includes(task.status)) {
     try {
       await addEventToGoogle({
@@ -184,6 +191,7 @@ async function updateTask(workspace, id, data) {
         isAllDay: true,
         targetEmails: validEmails,
         calendarId: calFor(task),
+        workspaceId: workspace.id,
       });
     } catch (error) {}
   }
