@@ -377,8 +377,8 @@ async function updateAppointment(workspace, id, data) {
     });
   } catch (err) {}
 
-  syncAppointmentToAccountingSheet(updated).catch((err) =>
-    console.error("[Accounting] Appointment sync failed:", err.message)
+  syncAppointmentToScheduleSheet(updated).catch((err) =>
+    console.error("[Schedule] Appointment sync failed:", err.message)
   );
   return updated;
 }
@@ -396,11 +396,12 @@ async function deleteAppointment(workspace, id) {
       title: `${record.assignee?.name || "TBA"} - 📅 Appointment: ${appointmentLabel(record)}`,
       startDate: record.startTime,
       targetEmails: emails,
+      workspaceId: workspace.id,
     });
   } catch (err) {}
 
   await prisma.appointment.delete({ where: { id } });
-  removeRecordFromAccountingSheet(id).catch((err) => console.error("Sheet Error:", err));
+  removeRecordFromScheduleSheet(id).catch((err) => console.error("Sheet Error:", err));
   return record;
 }
 
@@ -438,7 +439,7 @@ async function backfillAccounting(workspace) {
     where: { workspaceId: workspace.id },
     include: { assignees: true },
   });
-  const rowsAdded = await backfillAccountingSheet(appointments, events);
+  const rowsAdded = await backfillScheduleSheet(appointments, events);
   return { appointments: appointments.length, events: events.length, rowsAdded };
 }
 
@@ -446,7 +447,7 @@ async function syncCalendarAccess(workspace) {
   const employees = await prisma.employee.findMany({ where: { workspaceId: workspace.id } });
   const emails = employees.map((emp) => emp.email).filter((email) => email && email.includes("@"));
   if (emails.length === 0) return 0;
-  return await syncEmailsToGoogle(emails);
+  return await syncEmailsToGoogle(emails, workspace.id);
 }
 
 module.exports = {

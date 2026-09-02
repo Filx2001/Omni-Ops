@@ -41,6 +41,7 @@ model Workspace {
   googleCalendarId      String?
   googleLeadsSheetId    String?
   googleAccountingSheetId String?
+  googleScheduleSheetId   String?
   googlePersonalSheetId String?
 
   createdAt DateTime @default(now())

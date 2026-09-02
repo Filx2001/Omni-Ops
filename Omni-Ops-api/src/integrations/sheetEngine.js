@@ -75,6 +75,34 @@ async function getOrCreateTab(doc, title, headers) {
   return sheet;
 }
 
+/* ---------- self-healing: workspaces connected before a sheet existed get it now ---------- */
+async function getSheetContext(workspaceId, field) {
+  let ctx = await googleAuth.getAuthForWorkspace(workspaceId);
+  if (!ctx?.auth || !ctx?.ws) return null;
+  if (!ctx.ws[field]) {
+    await googleAuth.provisionGoogleResources(workspaceId);
+    ctx = await googleAuth.getAuthForWorkspace(workspaceId);
+    if (!ctx?.auth || !ctx?.ws?.[field]) return null;
+  }
+  return ctx;
+}
+
+/* ---------- shared date formatters ---------- */
+const fmtDate = (d, tz) =>
+  d ? new Date(d).toLocaleDateString("en-GB", { timeZone: tz || "UTC" }) : "";
+const fmtDay = (d, tz) =>
+  d ? new Date(d).toLocaleDateString("en-US", { weekday: "short", timeZone: tz || "UTC" }) : "";
+const fmtTime = (d, tz) =>
+  d
+    ? new Date(d).toLocaleTimeString("en-US", {
+        hour: "numeric",
+        minute: "2-digit",
+        timeZone: tz || "UTC",
+      })
+    : "";
+const fmtDateTime = (d, tz) =>
+  d ? new Date(d).toLocaleString("en-US", { timeZone: tz || "UTC" }) : "";
+
 module.exports = {
   withDoc,
   enqueue,
@@ -83,4 +111,9 @@ module.exports = {
   monthTitle,
   isMonthTab,
   getOrCreateTab,
+  getSheetContext,
+  fmtDate,
+  fmtDay,
+  fmtTime,
+  fmtDateTime,
 };
