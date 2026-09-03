@@ -7,7 +7,7 @@ function buildPdfUrl(invoiceId, days = 7) {
     .createHmac("sha256", process.env.PDF_LINK_SECRET)
     .update(`${invoiceId}.${exp}`)
     .digest("hex");
-  return `${process.env.API_URL}/invoices/${invoiceId}/pdf?exp=${exp}&sig=${sig}`;
+  return `${process.env.API_PUBLIC_URL}/invoices/${invoiceId}/pdf?exp=${exp}&sig=${sig}`;
 }
 
 module.exports = { buildPdfUrl };
