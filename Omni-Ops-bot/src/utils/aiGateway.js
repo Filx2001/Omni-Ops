@@ -189,10 +189,15 @@ function anthropicMessagesToGemini(messages) {
     if (m.role === "assistant") {
       const parts = [];
       for (const b of blocks) {
-        if (b.type === "text") parts.push({ text: b.text });
-        else if (b.type === "tool_use") {
+        if (b.type === "text") {
+          const part = { text: b.text };
+          if (b.thoughtSignature) part.thoughtSignature = b.thoughtSignature;
+          parts.push(part);
+        } else if (b.type === "tool_use") {
           toolNames[b.id] = b.name;
-          parts.push({ functionCall: { name: b.name, args: b.input || {} } });
+          const part = { functionCall: { name: b.name, args: b.input || {} } };
+          if (b.thoughtSignature) part.thoughtSignature = b.thoughtSignature;
+          parts.push(part);
         }
       }
       if (parts.length) contents.push({ role: "model", parts });
@@ -251,13 +256,16 @@ async function geminiCall(config, params) {
   const content = [];
   let i = 0;
   for (const p of parts) {
-    if (p.text) content.push({ type: "text", text: p.text });
+    // Gemini 2.5/3 "thinking" models attach a thoughtSignature to parts.
+    // It MUST be echoed back on the next turn or the API rejects the request.
+    if (p.text) content.push({ type: "text", text: p.text, thoughtSignature: p.thoughtSignature });
     else if (p.functionCall)
       content.push({
         type: "tool_use",
         id: `gem_${Date.now()}_${i++}`,
         name: p.functionCall.name,
         input: p.functionCall.args || {},
+        thoughtSignature: p.thoughtSignature,
       });
   }
   return {
