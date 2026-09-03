@@ -36,7 +36,7 @@ function startScheduler(client) {
       for (const ws of workspaces) {
         await runWithTenant(ws.workspaceId, async () => {
           try {
-            // HIT THE NEW DEDICATED ENDPOINT
+            // HIT THE NEW DEDICATED ENDPOINT (Only fetches upcoming, un-reminded items)
             const pendingRes = await axios.get("/reminders/pending").catch(() => ({ data: {} }));
 
             const { tasks = [], appointments = [], events = [] } = pendingRes.data || {};
