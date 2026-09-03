@@ -51,8 +51,11 @@ router.patch("/:id/status", async (req, res) => {
 
 router.delete("/:id", async (req, res) => {
   try {
-    res.json(await InvoiceService.deleteInvoice(req.workspace.id, req.params.id));
+    const deleted = await InvoiceService.deleteInvoice(req.workspace.id, req.params.id);
+    res.json(deleted);
   } catch (error) {
+    if (error.message === "Invoice not found")
+      return res.status(404).json({ error: error.message });
     res.status(500).json({ error: error.message });
   }
 });
@@ -68,16 +71,7 @@ router.post("/:id/send", async (req, res) => {
     res.status(500).json({ error: error.message });
   }
 });
-router.delete("/:id", async (req, res) => {
-  try {
-    const deleted = await InvoiceService.deleteInvoice(req.workspace.id, req.params.id);
-    res.json(deleted);
-  } catch (error) {
-    if (error.message === "Invoice not found")
-      return res.status(404).json({ error: error.message });
-    res.status(500).json({ error: error.message });
-  }
-});
+
 // Signed, expiring PDF link — verifies its own signature (no API key / workspace header needed)
 router.get("/:id/pdf", async (req, res) => {
   try {
@@ -101,7 +95,6 @@ router.get("/:id/pdf", async (req, res) => {
       where: { id: req.params.id },
       include: { createdBy: { select: { name: true } }, workspace: true },
     });
-
     if (!invoice) {
       console.error(`❌ PDF Error: Invoice with ID ${req.params.id} not found.`);
       return res.status(404).send("Invoice not found");
@@ -114,35 +107,51 @@ router.get("/:id/pdf", async (req, res) => {
       month: "short",
       year: "numeric",
     });
+    const issueTime = new Date(invoice.createdAt).toLocaleTimeString("en-GB", {
+      hour: "2-digit",
+      minute: "2-digit",
+    });
     const grossAmount = invoice.amount * invoice.quantity;
     const issuedBy = invoice.issuedByName || invoice.createdBy?.name || "System";
 
+    const descriptionHtml = invoice.description
+      ? `<br><span style="font-size: 13px; color: #718096;">${escapeHtml(invoice.description)}</span>`
+      : "";
+    const discountHtml =
+      invoice.discount > 0
+        ? `<p style="margin: 5px 0; color: #4a5568;">Discount: <strong>${escapeHtml(invoice.discount)}%</strong></p>`
+        : "";
+
     const html = `
-<div style="font-family: Arial, sans-serif; max-width: 700px; margin: auto; padding: 24px;">
-  <h1 style="text-align:center; margin:0;">${escapeHtml(orgName)}</h1>
-  <p style="text-align:center; color:#555;">Official Invoice</p>
-  <p><strong>Name:</strong> ${escapeHtml(invoice.customerName)}</p>
-  <p><strong>Invoice No:</strong> INV-${escapeHtml(invoice.invoiceNumber)}</p>
-  <p><strong>Date:</strong> ${escapeHtml(issueDate)}</p>
-  <p><strong>Issued By:</strong> ${escapeHtml(issuedBy)}</p>
-  <table style="width:100%; border-collapse:collapse; margin-top:16px;">
-    <tr style="background:#eee;">
-      <th style="padding:10px; border:1px solid #ccc; text-align:left;">Description</th>
-      <th style="padding:10px; border:1px solid #ccc;">Unit Price</th>
-      <th style="padding:10px; border:1px solid #ccc;">Qty</th>
-      <th style="padding:10px; border:1px solid #ccc;">Gross</th>
-    </tr>
-    <tr>
-      <td style="padding:10px; border:1px solid #ccc;">
-        ${escapeHtml(invoice.category)}${invoice.description ? ` — ${escapeHtml(invoice.description)}` : ""}
-      </td>
-      <td style="padding:10px; border:1px solid #ccc; text-align:center;">${currency} ${escapeHtml(invoice.amount)}</td>
-      <td style="padding:10px; border:1px solid #ccc; text-align:center;">${escapeHtml(invoice.quantity)}</td>
-      <td style="padding:10px; border:1px solid #ccc; text-align:center;">${currency} ${escapeHtml(grossAmount)}</td>
-    </tr>
-  </table>
-  ${invoice.discount > 0 ? `<p style="text-align:right;">Discount: ${escapeHtml(invoice.discount)}%</p>` : ""}
-  <h2 style="text-align:right;">Net Total: ${escapeHtml(invoice.netAmount)} ${currency}</h2>
+<div style="font-family: Arial, sans-serif; max-width: 600px; margin: auto; border: 1px solid #ddd; border-radius: 8px; overflow: hidden;">
+  <div style="background-color: #1a202c; color: white; padding: 20px; text-align: center;">
+    <h2 style="margin: 0; font-size: 24px;">${escapeHtml(orgName)}</h2>
+    <p style="color: #a0aec0; margin: 5px 0 0 0;">OFFICIAL INVOICE</p>
+  </div>
+  <div style="padding: 20px; background-color: #f7fafc;">
+    <p><strong>Invoice To:</strong> ${escapeHtml(invoice.customerName)}</p>
+    <p><strong>Invoice No:</strong> INV-${escapeHtml(invoice.invoiceNumber)}</p>
+    <p><strong>Date & Time:</strong> ${escapeHtml(issueDate)} - ${escapeHtml(issueTime)}</p>
+    <p><strong>Issued By:</strong> ${escapeHtml(issuedBy)}</p>
+    <table style="width: 100%; border-collapse: collapse; margin-top: 20px; background-color: white;">
+      <tr style="background-color: #cbd5e0; color: #2d3748;">
+        <th style="padding: 12px; border: 1px solid #e2e8f0;">Description</th>
+        <th style="padding: 12px; border: 1px solid #e2e8f0;">Qty</th>
+        <th style="padding: 12px; border: 1px solid #e2e8f0;">Gross Amount</th>
+      </tr>
+      <tr>
+        <td style="padding: 12px; border: 1px solid #e2e8f0; text-align: center;">
+          <strong>${escapeHtml(invoice.category)}</strong>${descriptionHtml}
+        </td>
+        <td style="padding: 12px; border: 1px solid #e2e8f0; text-align: center;">${escapeHtml(invoice.quantity)}</td>
+        <td style="padding: 12px; border: 1px solid #e2e8f0; text-align: center;">${grossAmount.toLocaleString()} ${currency}</td>
+      </tr>
+    </table>
+    <div style="margin-top: 20px; text-align: right; border-top: 2px solid #e2e8f0; padding-top: 15px;">
+      ${discountHtml}
+      <h3 style="color: #2b6cb0; margin: 10px 0; font-size: 22px;">Net Total: ${invoice.netAmount.toLocaleString()} ${currency}</h3>
+    </div>
+  </div>
 </div>`;
     res.send(html);
   } catch (error) {
