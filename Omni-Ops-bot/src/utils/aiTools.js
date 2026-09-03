@@ -285,8 +285,7 @@ const tools = [
         quantity: { type: "integer", description: "Default: 1" },
         discount: {
           type: "integer",
-          enum: [0, 5, 10, 15, 20],
-          description: "Discount %. Default: 0",
+          description: "Discount percentage: 0, 5, 10, 15, or 20. Default: 0",
         },
         description: { type: "string", description: "Service / item details" },
         status: { type: "string", enum: ["PENDING", "PAID"], description: "Default: PENDING" },
