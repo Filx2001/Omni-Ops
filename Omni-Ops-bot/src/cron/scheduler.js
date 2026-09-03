@@ -4,26 +4,54 @@ const { notifyReminder } = require("../utils/dmNotifier");
 const { runWithTenant } = require("../utils/tenantContext");
 
 /**
- * 30-minute reminder window.
- *
- * We send when the item is:
- * - 30 minutes or less away
- * - but not more than 5 minutes past due
+ * Standard 30-minute warning window.
  */
-const REMINDER_WINDOW_MAX_MINUTES = 30;
-const REMINDER_WINDOW_MIN_MINUTES = -5;
+const STANDARD_MAX_MINUTES = 30;
+const STANDARD_MIN_MINUTES = -5;
 
-function shouldSendReminder(dateValue) {
-  if (!dateValue) return false;
+/**
+ * Custom reminders (e.g. "1 day before") may fire up to 60 min late.
+ * Invisible for hour/day-scale reminders, but very restart-resistant.
+ */
+const CUSTOM_SLACK_MINUTES = 60;
 
-  const targetTime = new Date(dateValue).getTime();
+function diffMinutes(dateValue) {
+  const target = new Date(dateValue).getTime();
+  if (Number.isNaN(target)) return null;
+  return Math.floor((target - Date.now()) / 60000);
+}
 
-  if (Number.isNaN(targetTime)) return false;
+function inStandardWindow(dateValue) {
+  const diff = diffMinutes(dateValue);
+  return diff !== null && diff <= STANDARD_MAX_MINUTES && diff >= STANDARD_MIN_MINUTES;
+}
 
-  const diffInMinutes = Math.floor((targetTime - Date.now()) / 60000);
+function customMinutesFor(emp) {
+  if (!emp) return null;
+  if (emp.reminderUnit === "hours") return emp.reminderValue * 60;
+  if (emp.reminderUnit === "days") return emp.reminderValue * 1440;
+  return null;
+}
 
-  return (
-    diffInMinutes <= REMINDER_WINDOW_MAX_MINUTES && diffInMinutes >= REMINDER_WINDOW_MIN_MINUTES
+function inCustomWindow(dateValue, customMinutes) {
+  const diff = diffMinutes(dateValue);
+  return diff !== null && diff <= customMinutes && diff >= customMinutes - CUSTOM_SLACK_MINUTES;
+}
+
+function emptySent() {
+  return {
+    standard: { taskIds: [], appointmentIds: [], eventIds: [] },
+    custom: { taskIds: [], appointmentIds: [] },
+  };
+}
+
+function hasSent(sent) {
+  return Boolean(
+    sent.standard.taskIds.length ||
+    sent.standard.appointmentIds.length ||
+    sent.standard.eventIds.length ||
+    sent.custom.taskIds.length ||
+    sent.custom.appointmentIds.length
   );
 }
 
@@ -36,88 +64,123 @@ function startScheduler(client) {
       for (const ws of workspaces) {
         await runWithTenant(ws.workspaceId, async () => {
           try {
-            // HIT THE NEW DEDICATED ENDPOINT (Only fetches upcoming, un-reminded items)
             const pendingRes = await axios.get("/reminders/pending").catch(() => ({ data: {} }));
 
             const { tasks = [], appointments = [], events = [] } = pendingRes.data || {};
 
-            const sent = {
-              taskIds: [],
-              appointmentIds: [],
-              eventIds: [],
-            };
+            const sent = emptySent();
 
             /**
-             * TASK REMINDERS
+             * TASK REMINDERS (standard + custom)
              */
             for (const task of tasks) {
-              if (!task?.dueDate) continue;
-              if (!task?.assignedTo?.externalId) continue;
-              if (!shouldSendReminder(task.dueDate)) continue;
+              const emp = task?.assignedTo;
+              if (!emp?.externalId || !task.dueDate) continue;
 
-              try {
-                const result = await notifyReminder(
-                  client,
-                  task.assignedTo.externalId,
-                  "Task",
-                  task,
-                  "30 minutes"
-                );
-
-                if (result !== false) {
-                  sent.taskIds.push(task.id);
+              if (!task.reminderSent && inStandardWindow(task.dueDate)) {
+                try {
+                  const result = await notifyReminder(
+                    client,
+                    emp.externalId,
+                    "Task",
+                    task,
+                    "30 minutes"
+                  );
+                  if (result !== false) sent.standard.taskIds.push(task.id);
+                } catch (error) {
+                  console.error(`❌ Task reminder failed (${task.id}):`, error.message);
                 }
-              } catch (error) {
-                console.error(`❌ Task reminder failed for task ${task.id}:`, error.message);
+              }
+
+              const custom = customMinutesFor(emp);
+              if (
+                custom &&
+                custom !== 30 &&
+                !task.customReminderSent &&
+                inCustomWindow(task.dueDate, custom)
+              ) {
+                try {
+                  const result = await notifyReminder(
+                    client,
+                    emp.externalId,
+                    "Task",
+                    task,
+                    `${emp.reminderValue} ${emp.reminderUnit} before`
+                  );
+                  if (result !== false) sent.custom.taskIds.push(task.id);
+                } catch (error) {
+                  console.error(`❌ Custom task reminder failed (${task.id}):`, error.message);
+                }
               }
             }
 
             /**
-             * APPOINTMENT REMINDERS
+             * APPOINTMENT REMINDERS (standard + custom)
              */
             for (const appointment of appointments) {
-              if (!appointment?.startTime) continue;
-              if (!appointment?.assignee?.externalId) continue;
-              if (!shouldSendReminder(appointment.startTime)) continue;
+              const emp = appointment?.assignee;
+              if (!emp?.externalId || !appointment.startTime) continue;
 
-              try {
-                const result = await notifyReminder(
-                  client,
-                  appointment.assignee.externalId,
-                  "Appointment",
-                  appointment,
-                  "30 minutes"
-                );
-
-                if (result !== false) {
-                  sent.appointmentIds.push(appointment.id);
+              if (!appointment.reminderSent && inStandardWindow(appointment.startTime)) {
+                try {
+                  const result = await notifyReminder(
+                    client,
+                    emp.externalId,
+                    "Appointment",
+                    appointment,
+                    "30 minutes"
+                  );
+                  if (result !== false) sent.standard.appointmentIds.push(appointment.id);
+                } catch (error) {
+                  console.error(
+                    `❌ Appointment reminder failed (${appointment.id}):`,
+                    error.message
+                  );
                 }
-              } catch (error) {
-                console.error(
-                  `❌ Appointment reminder failed for appointment ${appointment.id}:`,
-                  error.message
-                );
+              }
+
+              const custom = customMinutesFor(emp);
+              if (
+                custom &&
+                custom !== 30 &&
+                !appointment.customReminderSent &&
+                inCustomWindow(appointment.startTime, custom)
+              ) {
+                try {
+                  const result = await notifyReminder(
+                    client,
+                    emp.externalId,
+                    "Appointment",
+                    appointment,
+                    `${emp.reminderValue} ${emp.reminderUnit} before`
+                  );
+                  if (result !== false) sent.custom.appointmentIds.push(appointment.id);
+                } catch (error) {
+                  console.error(
+                    `❌ Custom appointment reminder failed (${appointment.id}):`,
+                    error.message
+                  );
+                }
               }
             }
 
             /**
-             * EVENT REMINDERS
+             * EVENT REMINDERS (standard only — events have many assignees)
              */
             for (const event of events) {
-              if (!event?.startDate) continue;
-              if (!shouldSendReminder(event.startDate)) continue;
+              if (!event?.startDate || event.reminderSent) continue;
+              if (!inStandardWindow(event.startDate)) continue;
 
               const targets = (event.assignees || []).filter(
-                (assignee) => assignee?.externalId && assignee.reminderEnabled !== false
+                (a) => a?.externalId && a.reminderEnabled !== false
               );
 
               if (!targets.length) {
-                sent.eventIds.push(event.id);
+                sent.standard.eventIds.push(event.id);
                 continue;
               }
 
               let anySuccess = false;
-
               for (const target of targets) {
                 try {
                   const result = await notifyReminder(
@@ -127,33 +190,28 @@ function startScheduler(client) {
                     event,
                     "30 minutes"
                   );
-
-                  if (result !== false) {
-                    anySuccess = true;
-                  }
+                  if (result !== false) anySuccess = true;
                 } catch (error) {
-                  console.error(`❌ Event reminder failed for event ${event.id}:`, error.message);
+                  console.error(`❌ Event reminder failed (${event.id}):`, error.message);
                 }
               }
 
-              if (anySuccess) {
-                sent.eventIds.push(event.id);
-              }
+              if (anySuccess) sent.standard.eventIds.push(event.id);
             }
 
             /**
              * MARK SENT IN DATABASE
              */
-            if (sent.taskIds.length || sent.appointmentIds.length || sent.eventIds.length) {
+            if (hasSent(sent)) {
               await axios.post("/reminders/mark-sent", sent).catch((error) => {
                 console.error(
-                  `❌ Failed to mark reminders as sent for workspace ${ws.workspaceId}:`,
+                  `❌ Failed to mark reminders as sent (${ws.workspaceId}):`,
                   error.message
                 );
               });
             }
           } catch (error) {
-            console.error(`❌ Scheduler Error for workspace ${ws.workspaceId}:`, error.message);
+            console.error(`❌ Scheduler Error (${ws.workspaceId}):`, error.message);
           }
         });
       }

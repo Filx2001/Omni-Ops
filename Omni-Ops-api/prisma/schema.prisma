@@ -150,7 +150,7 @@ model Task {
 
   // NEW: prevents duplicate reminder DMs
   reminderSent Boolean @default(false)
-
+  customReminderSent Boolean @default(false)
   createdAt DateTime @default(now())
 
   logs TaskLog[]
@@ -208,7 +208,7 @@ model Appointment {
 
   // NEW: prevents duplicate reminder DMs
   reminderSent Boolean @default(false)
-
+  customReminderSent Boolean @default(false)
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
@@ -230,7 +230,7 @@ model Event {
 
   // NEW: prevents duplicate reminder DMs
   reminderSent Boolean @default(false)
-
+  customReminderSent Boolean @default(false)
   createdById String?
   createdBy   Employee?  @relation("EventCreator", fields: [createdById], references: [id])
   assignees   Employee[] @relation("EventAssignees")

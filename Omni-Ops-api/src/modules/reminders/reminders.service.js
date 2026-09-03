@@ -1,27 +1,46 @@
 const prisma = require("../../prisma");
 
-/**
- * Scheduler window:
- *
- * We fetch items that are due from 5 minutes in the past
- * until 45 minutes in the future.
- *
- * The bot then decides whether to send the actual 30-minute warning.
- */
-const WINDOW_START_MINUTES = -5;
-const WINDOW_END_MINUTES = 45;
+const LOOKBACK_MINUTES = 10;
+const STANDARD_LOOKAHEAD_MINUTES = 45;
 
-function getWindowDates() {
-  const now = new Date();
+function customMinutesFor(employee) {
+  if (!employee) return null;
+  if (employee.reminderUnit === "hours") return employee.reminderValue * 60;
+  if (employee.reminderUnit === "days") return employee.reminderValue * 1440;
+  return null;
+}
 
-  return {
-    start: new Date(now.getTime() + WINDOW_START_MINUTES * 60000),
-    end: new Date(now.getTime() + WINDOW_END_MINUTES * 60000),
-  };
+function ids(list) {
+  return Array.isArray(list) ? list : [];
 }
 
 async function getPendingReminders(workspace) {
-  const { start, end } = getWindowDates();
+  const now = new Date();
+
+  const employees = await prisma.employee.findMany({
+    where: {
+      workspaceId: workspace.id,
+      reminderEnabled: true,
+      externalId: { not: null },
+    },
+  });
+
+  if (!employees.length) {
+    return { tasks: [], appointments: [], events: [] };
+  }
+
+  const employeeIds = employees.map((e) => e.id);
+
+  let maxCustomMinutes = 0;
+  for (const employee of employees) {
+    const minutes = customMinutesFor(employee);
+    if (minutes && minutes > maxCustomMinutes) maxCustomMinutes = minutes;
+  }
+
+  const windowStart = new Date(now.getTime() - LOOKBACK_MINUTES * 60000);
+  const windowEnd = new Date(
+    now.getTime() + Math.max(maxCustomMinutes, STANDARD_LOOKAHEAD_MINUTES) * 60000
+  );
 
   const [tasks, appointments, events] = await Promise.all([
     prisma.task.findMany({
@@ -29,132 +48,82 @@ async function getPendingReminders(workspace) {
         workspaceId: workspace.id,
         isDeleted: false,
         isArchived: false,
-        reminderSent: false,
-        status: {
-          notIn: ["done", "cancelled"],
-        },
-        dueDate: {
-          gte: start,
-          lte: end,
-        },
-        assignedTo: {
-          reminderEnabled: true,
-          externalId: {
-            not: null,
-          },
-        },
+        status: { notIn: ["done", "cancelled"] },
+        dueDate: { gte: windowStart, lte: windowEnd },
+        assignedToId: { in: employeeIds },
+        OR: [{ reminderSent: false }, { customReminderSent: false }],
       },
-      include: {
-        assignedTo: true,
-      },
+      include: { assignedTo: true },
     }),
 
     prisma.appointment.findMany({
       where: {
         workspaceId: workspace.id,
-        reminderSent: false,
         isAllDay: false,
-        startTime: {
-          gte: start,
-          lte: end,
-        },
-        assignee: {
-          reminderEnabled: true,
-          externalId: {
-            not: null,
-          },
-        },
+        startTime: { gte: windowStart, lte: windowEnd },
+        assigneeId: { in: employeeIds },
+        OR: [{ reminderSent: false }, { customReminderSent: false }],
       },
-      include: {
-        assignee: true,
-      },
+      include: { assignee: true },
     }),
 
     prisma.event.findMany({
       where: {
         workspaceId: workspace.id,
-        reminderSent: false,
         isAllDay: false,
-        startDate: {
-          gte: start,
-          lte: end,
-        },
-        assignees: {
-          some: {
-            reminderEnabled: true,
-            externalId: {
-              not: null,
-            },
-          },
-        },
+        startDate: { gte: windowStart, lte: windowEnd },
+        reminderSent: false,
+        assignees: { some: { id: { in: employeeIds } } },
       },
-      include: {
-        assignees: true,
-      },
+      include: { assignees: true },
     }),
   ]);
 
-  return {
-    tasks,
-    appointments,
-    events,
-  };
+  return { tasks, appointments, events };
 }
 
 async function markRemindersSent(workspace, body = {}) {
-  const taskIds = Array.isArray(body.taskIds) ? body.taskIds : [];
-  const appointmentIds = Array.isArray(body.appointmentIds) ? body.appointmentIds : [];
-  const eventIds = Array.isArray(body.eventIds) ? body.eventIds : [];
+  const standard = body.standard || {};
+  const custom = body.custom || {};
 
-  const [tasks, appointments, events] = await Promise.all([
-    taskIds.length
+  await Promise.all([
+    ids(standard.taskIds).length
       ? prisma.task.updateMany({
-          where: {
-            workspaceId: workspace.id,
-            id: {
-              in: taskIds,
-            },
-          },
-          data: {
-            reminderSent: true,
-          },
+          where: { workspaceId: workspace.id, id: { in: ids(standard.taskIds) } },
+          data: { reminderSent: true },
         })
       : Promise.resolve(),
 
-    appointmentIds.length
+    ids(standard.appointmentIds).length
       ? prisma.appointment.updateMany({
-          where: {
-            workspaceId: workspace.id,
-            id: {
-              in: appointmentIds,
-            },
-          },
-          data: {
-            reminderSent: true,
-          },
+          where: { workspaceId: workspace.id, id: { in: ids(standard.appointmentIds) } },
+          data: { reminderSent: true },
         })
       : Promise.resolve(),
 
-    eventIds.length
+    ids(standard.eventIds).length
       ? prisma.event.updateMany({
-          where: {
-            workspaceId: workspace.id,
-            id: {
-              in: eventIds,
-            },
-          },
-          data: {
-            reminderSent: true,
-          },
+          where: { workspaceId: workspace.id, id: { in: ids(standard.eventIds) } },
+          data: { reminderSent: true },
+        })
+      : Promise.resolve(),
+
+    ids(custom.taskIds).length
+      ? prisma.task.updateMany({
+          where: { workspaceId: workspace.id, id: { in: ids(custom.taskIds) } },
+          data: { customReminderSent: true },
+        })
+      : Promise.resolve(),
+
+    ids(custom.appointmentIds).length
+      ? prisma.appointment.updateMany({
+          where: { workspaceId: workspace.id, id: { in: ids(custom.appointmentIds) } },
+          data: { customReminderSent: true },
         })
       : Promise.resolve(),
   ]);
 
-  return {
-    tasks,
-    appointments,
-    events,
-  };
+  return { ok: true };
 }
 
 module.exports = {
