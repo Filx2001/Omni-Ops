@@ -59,6 +59,7 @@ app.use("/sheets", require("./modules/sheets/sheets.routes"));
 app.use("/employees", require("./modules/employees/employees.routes"));
 app.use("/roles", require("./modules/roles/roles.routes"));
 app.use("/tasks", require("./modules/tasks/tasks.routes"));
+app.use("/reminders", requireWorkspace, require("./modules/reminders/reminders.routes"));
 app.use("/dashboard", require("./modules/dashboard/dashboard.routes"));
 app.use("/calendar", require("./modules/calendar/calendar.routes"));
 app.use("/crm", require("./modules/crm/crm.routes"));

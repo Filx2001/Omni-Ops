@@ -9,11 +9,6 @@ const { runWithTenant } = require("../utils/tenantContext");
  * We send when the item is:
  * - 30 minutes or less away
  * - but not more than 5 minutes past due
- *
- * This protects against:
- * - cron drift
- * - Railway restarts
- * - missed exact-minute checks
  */
 const REMINDER_WINDOW_MAX_MINUTES = 30;
 const REMINDER_WINDOW_MIN_MINUTES = -5;
@@ -41,6 +36,7 @@ function startScheduler(client) {
       for (const ws of workspaces) {
         await runWithTenant(ws.workspaceId, async () => {
           try {
+            // HIT THE NEW DEDICATED ENDPOINT
             const pendingRes = await axios.get("/reminders/pending").catch(() => ({ data: {} }));
 
             const { tasks = [], appointments = [], events = [] } = pendingRes.data || {};
