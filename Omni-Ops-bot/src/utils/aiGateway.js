@@ -18,7 +18,7 @@ const PROVIDERS = {
   gemini: {
     label: "Google Gemini",
     protocol: "gemini",
-    models: ["gemini-2.0-flash", "gemini-2.5-flash", "gemini-2.5-pro"],
+    models: ["gemini-3.6-flash", "gemini-3.6-pro", "gemini-2.5-flash"],
   },
   deepseek: {
     label: "DeepSeek",
