@@ -20,6 +20,7 @@ const {
 const { checkScheduleConflict } = require("../utils/conflictChecker");
 const { tools, MUTATING_TOOLS, getZonedDateStr, parseDueDate } = require("../utils/aiTools");
 const { executeTool } = require("../commands/assistant");
+const { getWorkspace } = require("../utils/workspace");
 const { runWithTenant } = require("../utils/tenantContext");
 
 const aai = process.env.ASSEMBLYAI_API_KEY
