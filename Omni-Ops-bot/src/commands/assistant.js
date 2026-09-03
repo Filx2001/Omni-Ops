@@ -1,5 +1,5 @@
 const { SlashCommandBuilder, EmbedBuilder } = require("discord.js");
-const Anthropic = require("@anthropic-ai/sdk");
+const { resolveAiConfig, createAiClient } = require("../utils/aiGateway");
 const axios = require("../utils/axiosInstance");
 const { requireRole, MANAGEMENT_ROLES } = require("../utils/requireRole");
 const { clearCache } = require("../utils/cache");
@@ -321,13 +321,13 @@ module.exports = {
 
     // Tenant-aware AI key: workspace key first, host fallback second
     const ws = await getWorkspace(interaction.guildId).catch(() => null);
-    const apiKey = ws?.aiApiKey || process.env.ANTHROPIC_API_KEY;
-    if (!apiKey) {
+    const aiConfig = resolveAiConfig(ws);
+    if (!aiConfig) {
       return interaction.editReply(
-        "❌ The AI assistant is not configured for this workspace. The system owner can add an API key via `/config setup` → 🤖 AI Key."
+        "❌ The AI assistant is not configured for this workspace. The system owner can add an API key via `/config setup` → 🤖 AI."
       );
     }
-    const client = new Anthropic({ apiKey });
+    const client = createAiClient(aiConfig);
 
     const userName = interaction.user.globalName || interaction.user.username;
     const tz = resolveTimeZone();

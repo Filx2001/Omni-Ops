@@ -1,5 +1,5 @@
 const { Events, ChannelType, EmbedBuilder } = require("discord.js");
-const Anthropic = require("@anthropic-ai/sdk");
+const { resolveAiConfig, createAiClient } = require("../utils/aiGateway");
 const axios = require("../utils/axiosInstance");
 const EMBED_COLORS = require("../utils/embedColors");
 const { AssemblyAI } = require("assemblyai");
@@ -913,13 +913,13 @@ module.exports = {
       await message.channel.sendTyping();
       try {
         const ws = await getWorkspace(workspaceId).catch(() => null);
-        const apiKey = ws?.aiApiKey || process.env.ANTHROPIC_API_KEY;
-        if (!apiKey) {
+        const aiConfig = resolveAiConfig(ws);
+        if (!aiConfig) {
           return message.reply(
-            "❌ The AI assistant is not configured for this workspace. The system owner can add an API key via `/config setup` → 🤖 AI Key."
+            "❌ The AI assistant is not configured for this workspace. The system owner can add an API key via `/config setup` → 🤖 AI."
           );
         }
-        const client = new Anthropic({ apiKey, fetch: globalThis.fetch });
+        const client = createAiClient(aiConfig);
 
         const [tasksData, apptsData, eventsData, leadsData, empsData, invsData, campaignsData] =
           await Promise.all([
