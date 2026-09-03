@@ -2,10 +2,7 @@ const express = require("express");
 
 const router = express.Router();
 
-const {
-  getPendingReminders,
-  markRemindersSent,
-} = require("../services/reminders/reminders.service");
+const { getPendingReminders, markRemindersSent } = require("./reminders.service");
 
 /**
  * GET /reminders/pending
