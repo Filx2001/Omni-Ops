@@ -6,8 +6,49 @@ const { parseDate, isValidYear } = require("../utils/dateParser");
 const { handleGlobalAutocomplete } = require("../utils/autocompleteHelper");
 const { notifyTask, notifyScheduleChannel } = require("../utils/dmNotifier");
 const { sendLog } = require("../utils/logger");
+
 function formatDate(date) {
   return new Date(date).toLocaleDateString("en-GB");
+}
+
+// Shows date + time, but only when a time is actually set (legacy tasks stay date-only)
+function formatDeadline(date) {
+  const d = new Date(date);
+  const hasTime = d.getHours() !== 0 || d.getMinutes() !== 0;
+  if (!hasTime) return d.toLocaleDateString("en-GB");
+  const time = d.toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" });
+  return `${d.toLocaleDateString("en-GB")} ${time}`;
+}
+
+/**
+ * Parses the new "time" option.
+ * Accepts:
+ *  - "HH:MM" (24h)  -> sets that time on the base date (bot server timezone)
+ *  - "+N"           -> N minutes from now (timezone-proof, great for testing)
+ */
+function parseTimeOption(timeString, baseDate) {
+  const trimmed = String(timeString).trim();
+
+  const relative = /^\+(\d{1,3})$/.exec(trimmed);
+  if (relative) {
+    const d = new Date();
+    d.setSeconds(0, 0);
+    d.setMinutes(d.getMinutes() + Number(relative[1]));
+    return d;
+  }
+
+  const absolute = /^(\d{1,2}):(\d{2})$/.exec(trimmed);
+  if (!absolute) return null;
+
+  const hours = Number(absolute[1]);
+  const minutes = Number(absolute[2]);
+  if (hours > 23 || minutes > 59) return null;
+
+  const d = new Date(baseDate);
+  if (isNaN(d.getTime())) return null;
+
+  d.setHours(hours, minutes, 0, 0);
+  return d;
 }
 
 // Personal tasks = Manager assigned to themselves -> No schedule channel broadcast
@@ -60,6 +101,12 @@ module.exports = {
         )
         .addStringOption((option) =>
           option.setName("deadline").setDescription("DD/MM OR tomorrow, today").setRequired(false)
+        )
+        .addStringOption((option) =>
+          option
+            .setName("time")
+            .setDescription("Due time: HH:MM (e.g. 14:30) or +N mins (e.g. +35)")
+            .setRequired(false)
         )
         .addAttachmentOption((option) =>
           option.setName("file").setDescription("Task attachment").setRequired(false)
@@ -127,6 +174,12 @@ module.exports = {
         .addStringOption((option) =>
           option.setName("deadline").setDescription("DD/MM OR tomorrow, today").setRequired(false)
         )
+        .addStringOption((option) =>
+          option
+            .setName("time")
+            .setDescription("Due time: HH:MM (e.g. 14:30) or +N mins (e.g. +35)")
+            .setRequired(false)
+        )
     )
     .addSubcommand((sub) =>
       sub
@@ -190,6 +243,7 @@ module.exports = {
         const priority = interaction.options.getString("priority");
         const attachment = interaction.options.getAttachment("file");
         const deadline = interaction.options.getString("deadline");
+        const time = interaction.options.getString("time");
 
         let dueDate = null;
         if (deadline) {
@@ -199,6 +253,17 @@ module.exports = {
               "❌ Invalid date format. You can use 'today', 'tomorrow', or 'DD/MM'."
             );
           }
+        }
+
+        // NEW: combine the deadline day with an exact time (or use +N minutes from now)
+        if (time) {
+          const combined = parseTimeOption(time, dueDate || new Date());
+          if (!combined) {
+            return interaction.editReply(
+              "❌ Invalid time format. Use HH:MM (e.g. 14:30) or +N minutes (e.g. +35)."
+            );
+          }
+          dueDate = combined;
         }
 
         // Prevent scheduling in past years
@@ -244,7 +309,7 @@ module.exports = {
             },
             {
               name: "⏰ Deadline",
-              value: task.dueDate ? new Date(task.dueDate).toLocaleDateString() : "No deadline",
+              value: task.dueDate ? formatDeadline(task.dueDate) : "No deadline",
             },
             ...(attachment
               ? [{ name: "📎 Attachment", value: `[${attachment.name}](${attachment.url})` }]
@@ -508,6 +573,7 @@ module.exports = {
         const employeeId = interaction.options.getString("employee");
         const priority = interaction.options.getString("priority");
         const deadline = interaction.options.getString("deadline");
+        const time = interaction.options.getString("time");
 
         const updateData = {};
         if (title) updateData.title = title;
@@ -526,6 +592,30 @@ module.exports = {
           updateData.dueDate = parsedDate;
         }
 
+        // NEW: combine with exact time, or apply +N minutes from now
+        if (time) {
+          let baseDate = updateData.dueDate || null;
+
+          // If only a fixed time was given, keep the task's existing day
+          if (!baseDate && !time.trim().startsWith("+")) {
+            const tasksRes = await axios.get(`/tasks`);
+            const existing = (tasksRes.data || []).find((t) => t.id === taskId);
+            baseDate = existing?.dueDate || null;
+          }
+
+          if (!baseDate && !time.trim().startsWith("+")) {
+            return interaction.editReply("❌ This task has no deadline. Set a deadline first.");
+          }
+
+          const combined = parseTimeOption(time, baseDate || new Date());
+          if (!combined) {
+            return interaction.editReply(
+              "❌ Invalid time format. Use HH:MM (e.g. 14:30) or +N minutes (e.g. +35)."
+            );
+          }
+          updateData.dueDate = combined;
+        }
+
         const response = await axios.patch(`/tasks/${taskId}`, updateData);
         clearCache("all_tasks");
 
@@ -542,7 +632,7 @@ module.exports = {
             { name: "🔥 Priority", value: response.data.priority, inline: true },
             {
               name: "📅 Deadline",
-              value: response.data.dueDate ? formatDate(response.data.dueDate) : "No deadline",
+              value: response.data.dueDate ? formatDeadline(response.data.dueDate) : "No deadline",
               inline: true,
             },
             {
