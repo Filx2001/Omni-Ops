@@ -306,6 +306,7 @@ async function executeTool(toolName, toolInput, manager, issuedByName) {
 }
 
 module.exports = {
+  executeTool,
   data: new SlashCommandBuilder()
     .setName("ai")
     .setDescription("Ask the AI Assistant (Admin Mode) to manage the system")

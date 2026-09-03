@@ -19,7 +19,7 @@ const {
 } = require("../utils/dateParser");
 const { checkScheduleConflict } = require("../utils/conflictChecker");
 const { tools, MUTATING_TOOLS, getZonedDateStr, parseDueDate } = require("../utils/aiTools");
-const { getWorkspace } = require("../utils/workspace");
+const { executeTool } = require("../commands/assistant");
 const { runWithTenant } = require("../utils/tenantContext");
 
 const aai = process.env.ASSEMBLYAI_API_KEY
@@ -1097,6 +1097,25 @@ You cannot delete leads, employees or invoices — tell the user to use /lead de
               });
               return;
             }
+            // Retrieval tool(s): execute them and feed the results back to the model
+            const toolResults = [];
+            for (const block of response.content.filter((b) => b.type === "tool_use")) {
+              let result;
+              try {
+                result = await executeTool(
+                  block.name,
+                  block.input,
+                  manager,
+                  message.member?.displayName || message.author.username
+                );
+              } catch (err) {
+                result = `❌ Error: ${err.response?.data?.error || err.message}`;
+              }
+              toolResults.push({ type: "tool_result", tool_use_id: block.id, content: result });
+            }
+            messages.push({ role: "assistant", content: response.content });
+            messages.push({ role: "user", content: toolResults });
+            continue;
           }
           break;
         }
