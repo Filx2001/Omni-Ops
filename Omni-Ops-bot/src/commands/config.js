@@ -14,39 +14,52 @@ const axios = require("../utils/axiosInstance");
 const { getWorkspace, updateWorkspace } = require("../utils/workspace");
 const EMBED_COLORS = require("../utils/embedColors");
 const { isValidTimeZone } = require("../utils/dateParser");
+const { PROVIDERS, encodeAiConfig, testAiConnection } = require("../utils/aiGateway");
+
 const TIMEZONE_OPTIONS = [
   { label: "🌐 UTC (GMT)", value: "UTC" },
-  { label: "🇬🇧 London", value: "Europe/London" },
+  { label: "🇬 London", value: "Europe/London" },
   { label: "🇫 Paris", value: "Europe/Paris" },
   { label: "🇩🇪 Berlin", value: "Europe/Berlin" },
-  { label: "🇹 Istanbul", value: "Europe/Istanbul" },
+  { label: "🇹🇷 Istanbul", value: "Europe/Istanbul" },
   { label: "🇷🇺 Moscow", value: "Europe/Moscow" },
   { label: "🇪 Cairo", value: "Africa/Cairo" },
-  { label: "🇦 Casablanca", value: "Africa/Casablanca" },
+  { label: "🇲 Casablanca", value: "Africa/Casablanca" },
   { label: "🇳🇬 Lagos", value: "Africa/Lagos" },
-  { label: "🇿 Johannesburg", value: "Africa/Johannesburg" },
+  { label: "🇿🇦 Johannesburg", value: "Africa/Johannesburg" },
   { label: "🇸🇦 Riyadh", value: "Asia/Riyadh" },
   { label: "🇶🇦 Qatar", value: "Asia/Qatar" },
   { label: "🇦🇪 Dubai", value: "Asia/Dubai" },
   { label: "🇯🇴 Amman", value: "Asia/Amman" },
-  { label: "🇱🇧 Beirut", value: "Asia/Beirut" },
+  { label: "🇱 Beirut", value: "Asia/Beirut" },
   { label: "🇮🇶 Baghdad", value: "Asia/Baghdad" },
-  { label: "🇮 Tehran", value: "Asia/Tehran" },
+  { label: "🇮🇷 Tehran", value: "Asia/Tehran" },
   { label: "🇵🇰 Karachi", value: "Asia/Karachi" },
   { label: "🇮 India", value: "Asia/Kolkata" },
-  { label: "🇸 Singapore", value: "Asia/Singapore" },
-  { label: "🇯🇵 Tokyo", value: "Asia/Tokyo" },
+  { label: "🇸🇬 Singapore", value: "Asia/Singapore" },
+  { label: "🇯 Tokyo", value: "Asia/Tokyo" },
   { label: "🇺🇸 New York", value: "America/New_York" },
   { label: "🇺🇸 Los Angeles", value: "America/Los_Angeles" },
-  { label: "🇧 São Paulo", value: "America/Sao_Paulo" },
+  { label: "🇧🇷 São Paulo", value: "America/Sao_Paulo" },
   { label: "⌨️ Other (type manually)", value: "__other__" },
 ];
+
 // The server owner IS the system owner — always derived live from Discord,
 // so ownership transfers automatically with the server.
 const isOwner = (i) => i.user.id === i.guild.ownerId;
-
 const btn = (id, label, style) =>
   new ButtonBuilder().setCustomId(id).setLabel(label).setStyle(style);
+
+// Shows provider + model in the panel (parses the JSON config stored in aiApiKey)
+function aiLabel(ws) {
+  if (!ws?.hasAiKey && !ws?.aiApiKey) return "❌ Not set (optional)";
+  try {
+    const cfg = JSON.parse(ws.aiApiKey);
+    if (cfg?.provider)
+      return `✅ ${PROVIDERS[cfg.provider]?.label || cfg.provider} · ${cfg.model || "default"}`;
+  } catch {}
+  return "✅ Set (legacy key)";
+}
 
 async function buildPanel(interaction, ws) {
   const ch = (id) => (id ? `<#${id}>` : "Not set");
@@ -62,7 +75,7 @@ async function buildPanel(interaction, ws) {
       { name: "🏢 Organization", value: ws.organizationName || "—", inline: true },
       { name: "🌍 Timezone", value: ws.timezone || "UTC", inline: true },
       { name: "💱 Currency", value: ws.currency || "USD", inline: true },
-      { name: "🤖 AI Key", value: ws.hasAiKey ? "✅ Set" : "❌ Not set (optional)", inline: true },
+      { name: "🤖 AI", value: aiLabel(ws), inline: true },
       {
         name: "🔗 Google",
         value: ws.googleEmail ? `✅ ${ws.googleEmail}` : "❌ Not connected",
@@ -88,7 +101,7 @@ async function buildPanel(interaction, ws) {
     btn("cfg_org", "🏢 Name", ButtonStyle.Secondary),
     btn("cfg_tz", "🌍 Timezone", ButtonStyle.Secondary),
     btn("cfg_cur", "💱 Currency", ButtonStyle.Secondary),
-    btn("cfg_ai", "🤖 AI Key", ButtonStyle.Secondary),
+    btn("cfg_ai", "🤖 AI", ButtonStyle.Secondary),
     btn("cfg_google", "🔗 Google", ButtonStyle.Success)
   );
   const row2 = new ActionRowBuilder().addComponents(
@@ -103,7 +116,6 @@ async function buildPanel(interaction, ws) {
     btn("cfg_ch_welcome", "👋 Welcome", ButtonStyle.Primary),
     btn("cfg_ch_intro", "🤝 Intro", ButtonStyle.Primary)
   );
-
   return { embeds: [embed], components: [row1, row2, row3] };
 }
 
@@ -125,6 +137,43 @@ const successEmbed = (title, description) =>
     .setTitle(title)
     .setDescription(description)
     .setTimestamp();
+
+// Key (+ optional base URL / custom model) modal for the AI connection
+async function showAiKeyModal(interaction, provider, model) {
+  const m = new ModalBuilder()
+    .setCustomId(`cfg_modal_ai_key:${provider}:${model}`)
+    .setTitle("🤖 AI Connection");
+  if (model === "__custom__") {
+    m.addComponents(
+      new ActionRowBuilder().addComponents(
+        new TextInputBuilder()
+          .setCustomId("model")
+          .setLabel("Model name")
+          .setStyle(TextInputStyle.Short)
+          .setPlaceholder("e.g. llama-3.3-70b, grok-2, mistral-large…")
+          .setRequired(true)
+      )
+    );
+  }
+  m.addComponents(
+    new ActionRowBuilder().addComponents(
+      new TextInputBuilder()
+        .setCustomId("key")
+        .setLabel("API key (stored encrypted)")
+        .setStyle(TextInputStyle.Short)
+        .setRequired(true)
+    ),
+    new ActionRowBuilder().addComponents(
+      new TextInputBuilder()
+        .setCustomId("base")
+        .setLabel(provider === "custom" ? "Base URL (required)" : "Base URL (optional override)")
+        .setStyle(TextInputStyle.Short)
+        .setRequired(provider === "custom")
+        .setPlaceholder("e.g. https://api.openai.com/v1")
+    )
+  );
+  return interaction.showModal(m);
+}
 
 module.exports = {
   data: new SlashCommandBuilder()
@@ -204,16 +253,14 @@ module.exports = {
       });
     }
 
-    // ================= DAILY REPORT (personal, kept from old version) =================
+    // ================= DAILY REPORT =================
     if (subcommand === "daily-report") {
       await interaction.deferReply({ flags: MessageFlags.Ephemeral });
       const enabled = interaction.options.getString("status") === "on";
-
       let me;
       try {
         me = (await axios.get(`/employees/external/${interaction.user.id}`)).data;
       } catch {}
-
       if (!me) {
         return interaction.editReply({
           embeds: [
@@ -226,7 +273,6 @@ module.exports = {
           ],
         });
       }
-
       await axios.patch(`/employees/${me.id}`, {
         dailyReportEnabled: enabled,
       });
@@ -242,7 +288,7 @@ module.exports = {
       });
     }
 
-    // ================= LINKS (kept from old version) =================
+    // ================= LINKS =================
     if (subcommand === "links") {
       await interaction.deferReply({ flags: MessageFlags.Ephemeral });
       try {
@@ -271,7 +317,6 @@ module.exports = {
           line("Server", data.api.baseUrl),
           line("Health check", data.api.health),
         ].filter(Boolean);
-
         const embed = new EmbedBuilder()
           .setColor(EMBED_COLORS.INFO)
           .setTitle("🔗 Project Links")
@@ -291,12 +336,12 @@ module.exports = {
     }
   },
 
-  // ================= CONTROL PANEL buttons & modals (routed from interactionCreate) =================
+  // ================= CONTROL PANEL buttons, selects & modals =================
   async handleComponent(interaction) {
     if (!isOwner(interaction)) {
       return interaction
         .reply({
-          content: "❌ Only the **server owner** can change settings.",
+          content: "❌ Only the server owner can change settings.",
           flags: MessageFlags.Ephemeral,
         })
         .catch(() => {});
@@ -305,7 +350,6 @@ module.exports = {
     // ---- Buttons ----
     if (interaction.isButton()) {
       const id = interaction.customId;
-
       if (id === "cfg_org")
         return interaction.showModal(
           modal(
@@ -346,17 +390,22 @@ module.exports = {
         return interaction.showModal(
           modal("cfg_modal_cur", "Currency", "cur", "3-letter currency code", "e.g. USD, EUR, GBP")
         );
-      if (id === "cfg_ai")
-        return interaction.showModal(
-          modal(
-            "cfg_modal_ai",
-            "AI Key (optional)",
-            "ai",
-            "Anthropic API key — stored encrypted (type 'none' to remove)",
-            "sk-ant-..."
-          )
-        );
-
+      if (id === "cfg_ai") {
+        const ws = await getWorkspace(interaction.guildId, {
+          create: true,
+          guildName: interaction.guild.name,
+        });
+        const panel = await buildPanel(interaction, ws);
+        const select = new StringSelectMenuBuilder()
+          .setCustomId("cfg_select_ai_provider")
+          .setPlaceholder("🤖 Pick an AI provider…")
+          .addOptions(
+            ...Object.entries(PROVIDERS).map(([value, p]) => ({ label: p.label, value })),
+            { label: "❌ Remove AI config", value: "__remove__" }
+          );
+        panel.components.push(new ActionRowBuilder().addComponents(select));
+        return interaction.update(panel);
+      }
       const channelMap = {
         cfg_ch_leads: "leadsChannelId",
         cfg_ch_schedule: "scheduleChannelId",
@@ -394,9 +443,70 @@ module.exports = {
       return interaction.update(await buildPanel(interaction, ws));
     }
 
+    // ---- AI provider dropdown ----
+    if (interaction.isStringSelectMenu() && interaction.customId === "cfg_select_ai_provider") {
+      const provider = interaction.values[0];
+      if (provider === "__remove__") {
+        const ws = await updateWorkspace(interaction.guildId, { aiApiKey: null });
+        return interaction.update(await buildPanel(interaction, ws));
+      }
+      const ws = await getWorkspace(interaction.guildId, {
+        create: true,
+        guildName: interaction.guild.name,
+      });
+      const panel = await buildPanel(interaction, ws);
+      const models = PROVIDERS[provider]?.models || [];
+      const select = new StringSelectMenuBuilder()
+        .setCustomId(`cfg_select_ai_model:${provider}`)
+        .setPlaceholder("🧠 Pick a model…")
+        .addOptions(...models.slice(0, 24).map((m) => ({ label: m, value: m })), {
+          label: "⌨️ Custom model (type manually)",
+          value: "__custom__",
+        });
+      panel.components.push(new ActionRowBuilder().addComponents(select));
+      return interaction.update(panel);
+    }
+
+    // ---- AI model dropdown → key modal ----
+    if (
+      interaction.isStringSelectMenu() &&
+      interaction.customId.startsWith("cfg_select_ai_model:")
+    ) {
+      const provider = interaction.customId.split(":")[1];
+      return showAiKeyModal(interaction, provider, interaction.values[0]);
+    }
+
     // ---- Modals ----
     if (interaction.isModalSubmit()) {
       const id = interaction.customId;
+
+      // AI connection modal: test FIRST, save only if the key works
+      if (id.startsWith("cfg_modal_ai_key:")) {
+        const parts = id.split(":");
+        const provider = parts[1];
+        const modelSel = parts[2];
+        const model =
+          modelSel === "__custom__"
+            ? interaction.fields.getTextInputValue("model").trim()
+            : modelSel;
+        const key = interaction.fields.getTextInputValue("key").trim();
+        const base = interaction.fields.getTextInputValue("base").trim();
+        const cfg = { provider, model, key, baseUrl: base || undefined };
+
+        await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+        const test = await testAiConnection(cfg);
+        if (!test.ok) {
+          return interaction.editReply({
+            content: `${test.message}\n🚫 Nothing was saved — fix the details and try again.`,
+          });
+        }
+        const ws = await updateWorkspace(interaction.guildId, { aiApiKey: encodeAiConfig(cfg) });
+        await interaction.message.edit(await buildPanel(interaction, ws)).catch(() => {});
+        return interaction.editReply({
+          content: `${test.message}\n💾 Saved for this workspace only.`,
+        });
+      }
+
       let patch = null;
       if (id === "cfg_modal_org")
         patch = { organizationName: interaction.fields.getTextInputValue("org") };
@@ -412,10 +522,6 @@ module.exports = {
       }
       if (id === "cfg_modal_cur")
         patch = { currency: interaction.fields.getTextInputValue("cur").trim().toUpperCase() };
-      if (id === "cfg_modal_ai") {
-        const v = interaction.fields.getTextInputValue("ai").trim();
-        patch = { aiApiKey: v.toLowerCase() === "none" ? null : v };
-      }
       if (!patch) return;
       const ws = await updateWorkspace(interaction.guildId, patch);
       return interaction.update(await buildPanel(interaction, ws));
