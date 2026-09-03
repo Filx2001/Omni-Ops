@@ -36,13 +36,13 @@ model Workspace {
   aiApiKey String?
 
   // Per-tenant Google connection (OAuth, encrypted refresh token)
-  googleEmail           String?
-  googleRefreshToken    String?
-  googleCalendarId      String?
-  googleLeadsSheetId    String?
+  googleEmail             String?
+  googleRefreshToken      String?
+  googleCalendarId        String?
+  googleLeadsSheetId      String?
   googleAccountingSheetId String?
   googleScheduleSheetId   String?
-  googlePersonalSheetId String?
+  googlePersonalSheetId   String?
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -61,12 +61,12 @@ model Workspace {
 }
 
 model Role {
-  id          String   @id @default(uuid())
+  id          String    @id @default(uuid())
   workspaceId String
   workspace   Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
   name        String
   description String?
-  createdAt   DateTime @default(now())
+  createdAt   DateTime  @default(now())
 
   employees Employee[]
 
@@ -74,7 +74,7 @@ model Role {
 }
 
 model Employee {
-  id          String   @id @default(uuid())
+  id          String    @id @default(uuid())
   workspaceId String
   workspace   Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
   name        String
@@ -82,8 +82,8 @@ model Employee {
   phone       String?
   externalId  String? // Discord / Slack user ID (platform-agnostic)
   roleId      String?
-  role        Role?    @relation(fields: [roleId], references: [id])
-  isActive    Boolean  @default(true)
+  role        Role?     @relation(fields: [roleId], references: [id])
+  isActive    Boolean   @default(true)
 
   // Reminder preferences
   reminderValue   Int     @default(1)
@@ -95,17 +95,17 @@ model Employee {
 
   createdAt DateTime @default(now())
 
-  assignedTasks       Task[]        @relation("AssignedTasks")
-  createdTasks        Task[]        @relation("CreatedTasks")
-  taskLogs            TaskLog[]
-  auditLogs           AuditLog[]
-  interactions        Interaction[] @relation("InteractionCreator")
-  campaigns           Campaign[]    @relation("CampaignCreator")
-  invoices            Invoice[]
-  leadsAssigned       Lead[]        @relation("LeadAssignee")
-  createdEvents       Event[]       @relation("EventCreator")
-  assignedEvents      Event[]       @relation("EventAssignees")
-  createdAppointments Appointment[] @relation("AppointmentCreator")
+  assignedTasks        Task[]        @relation("AssignedTasks")
+  createdTasks         Task[]        @relation("CreatedTasks")
+  taskLogs             TaskLog[]
+  auditLogs            AuditLog[]
+  interactions         Interaction[] @relation("InteractionCreator")
+  campaigns            Campaign[]    @relation("CampaignCreator")
+  invoices             Invoice[]
+  leadsAssigned        Lead[]        @relation("LeadAssignee")
+  createdEvents        Event[]       @relation("EventCreator")
+  assignedEvents       Event[]       @relation("EventAssignees")
+  createdAppointments  Appointment[] @relation("AppointmentCreator")
   assignedAppointments Appointment[] @relation("AppointmentAssignee")
 
   @@unique([workspaceId, email])
@@ -128,26 +128,30 @@ enum TaskPriority {
 }
 
 model Task {
-  id          String       @id @default(uuid())
-  workspaceId String
-  workspace   Workspace    @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
-  title       String
-  description String?
+  id           String       @id @default(uuid())
+  workspaceId  String
+  workspace    Workspace    @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  title        String
+  description  String?
   assignedToId String?
-  assignedTo  Employee?    @relation("AssignedTasks", fields: [assignedToId], references: [id])
-  createdById String?
-  createdBy   Employee?    @relation("CreatedTasks", fields: [createdById], references: [id])
-  status      TaskStatus   @default(pending)
-  priority    TaskPriority @default(medium)
-  dueDate     DateTime?
-  completedAt DateTime?
-  completedLate Boolean    @default(false)
-  daysLate    Int          @default(0)
-  isDeleted   Boolean      @default(false)
-  deletedAt   DateTime?
-  isArchived  Boolean      @default(false)
-  archivedAt  DateTime?
-  createdAt   DateTime     @default(now())
+  assignedTo   Employee?    @relation("AssignedTasks", fields: [assignedToId], references: [id])
+  createdById  String?
+  createdBy    Employee?    @relation("CreatedTasks", fields: [createdById], references: [id])
+  status       TaskStatus   @default(pending)
+  priority     TaskPriority @default(medium)
+  dueDate      DateTime?
+  completedAt  DateTime?
+  completedLate Boolean     @default(false)
+  daysLate     Int          @default(0)
+  isDeleted    Boolean      @default(false)
+  deletedAt    DateTime?
+  isArchived   Boolean      @default(false)
+  archivedAt   DateTime?
+
+  // NEW: prevents duplicate reminder DMs
+  reminderSent Boolean @default(false)
+
+  createdAt DateTime @default(now())
 
   logs TaskLog[]
 
@@ -165,11 +169,11 @@ model TaskLog {
   oldStatus TaskStatus?
   newStatus TaskStatus?
   note      String?
-  createdAt DateTime    @default(now())
+  createdAt DateTime  @default(now())
 }
 
 model AuditLog {
-  id          String   @id @default(uuid())
+  id          String    @id @default(uuid())
   workspaceId String
   workspace   Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
   actorId     String?
@@ -180,12 +184,12 @@ model AuditLog {
   entityId    String
   oldValue    Json?
   newValue    Json?
-  createdAt   DateTime @default(now())
+  createdAt   DateTime  @default(now())
 }
 
 // ══════════════════════════ SCHEDULING ══════════════════════════
 model Appointment {
-  id          String   @id @default(uuid())
+  id          String    @id @default(uuid())
   workspaceId String
   workspace   Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
   title       String? // auto-named from assignee + date when empty
@@ -194,13 +198,16 @@ model Appointment {
   day         String? // derived from startTime when empty
   startTime   DateTime
   endTime     DateTime
-  isAllDay    Boolean  @default(false)
+  isAllDay    Boolean   @default(false)
   groupId     String? // repeated-series marker
 
   assigneeId  String?
   assignee    Employee? @relation("AppointmentAssignee", fields: [assigneeId], references: [id])
   createdById String?
   createdBy   Employee? @relation("AppointmentCreator", fields: [createdById], references: [id])
+
+  // NEW: prevents duplicate reminder DMs
+  reminderSent Boolean @default(false)
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -209,20 +216,23 @@ model Appointment {
 }
 
 model Event {
-  id          String   @id @default(uuid())
+  id          String    @id @default(uuid())
   workspaceId String
   workspace   Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
   title       String
   description String?
-  type        String   @default("event") // meeting, deadline, milestone, workshop, social, event
+  type        String    @default("event") // meeting, deadline, milestone, workshop, social, event
   startDate   DateTime
   endDate     DateTime
-  isAllDay    Boolean  @default(false)
+  isAllDay    Boolean   @default(false)
   groupId     String?
   externalCalendarIds Json? // Google/Outlook event IDs per day
 
+  // NEW: prevents duplicate reminder DMs
+  reminderSent Boolean @default(false)
+
   createdById String?
-  createdBy   Employee? @relation("EventCreator", fields: [createdById], references: [id])
+  createdBy   Employee?  @relation("EventCreator", fields: [createdById], references: [id])
   assignees   Employee[] @relation("EventAssignees")
 
   createdAt DateTime @default(now())
@@ -357,7 +367,7 @@ enum RecipientStatus {
 }
 
 model Campaign {
-  id          String   @id @default(uuid())
+  id          String    @id @default(uuid())
   workspaceId String
   workspace   Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
   name        String
@@ -416,18 +426,18 @@ model CampaignRecipient {
 
 // ══════════════════════════ BILLING ══════════════════════════
 model Invoice {
-  id            String   @id @default(uuid())
+  id            String    @id @default(uuid())
   workspaceId   String
   workspace     Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
-  invoiceNumber Int      @default(autoincrement())
+  invoiceNumber Int       @default(autoincrement())
   customerName  String
   category      String // consulting, course, workshop, service, product...
   description   String
   amount        Float // unit price in workspace currency
-  quantity      Int      @default(1)
-  discount      Int      @default(0)
+  quantity      Int       @default(1)
+  discount      Int       @default(0)
   netAmount     Float
-  status        String   @default("PENDING") // PENDING / PAID / CANCELLED
+  status        String    @default("PENDING") // PENDING / PAID / CANCELLED
   issuedByName  String?
 
   createdById String
