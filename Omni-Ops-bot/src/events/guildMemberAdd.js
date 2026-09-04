@@ -15,11 +15,35 @@ module.exports = {
         if (role) {
           await member.roles
             .add(role)
-            .catch((err) => console.error("⚠️ Failed to assign auto-role:", err));
+            .catch((err) => console.error("⚠️ Failed to assign auto-role:", err.message));
+        } else {
+          console.error(
+            `⚠️ Auto-role ${settings.autoRoleId} not found in guild ${member.guild.id}`
+          );
         }
       }
 
-      // 2. Welcome Message & Routing
+      // 2. Welcome DM (private)
+      try {
+        const dmEmbed = new EmbedBuilder()
+          .setColor("#0099ff")
+          .setTitle(` Welcome to ${member.guild.name}!`)
+          .setDescription(
+            `Hi ${member.displayName}, we're glad to have you here!\n\n` +
+              (settings.introChannelId
+                ? `To get started, head over to <#${settings.introChannelId}> and introduce yourself. 🚀`
+                : `Feel free to look around and say hi! 🚀`)
+          )
+          .setThumbnail(member.guild.iconURL({ dynamic: true }))
+          .setTimestamp();
+
+        await member.send({ embeds: [dmEmbed] });
+      } catch (err) {
+        // User has DMs closed — the public channel message below still covers them
+        console.error(`⚠️ Could not DM new member ${member.user.tag}:`, err.message);
+      }
+
+      // 3. Public welcome channel message
       if (settings.welcomeChannelId && settings.introChannelId) {
         const welcomeChannel = member.guild.channels.cache.get(settings.welcomeChannelId);
         if (welcomeChannel) {
@@ -31,6 +55,7 @@ module.exports = {
             )
             .setThumbnail(member.user.displayAvatarURL({ dynamic: true }))
             .setTimestamp();
+
           await welcomeChannel.send({ content: `Welcome ${member}`, embeds: [welcomeEmbed] });
         }
       }
