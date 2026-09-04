@@ -16,7 +16,7 @@ const { requireRole } = require("../utils/requireRole");
 const { handleGlobalAutocomplete } = require("../utils/autocompleteHelper");
 const { parseDate } = require("../utils/dateParser");
 const { buildPdfUrl } = require("../utils/pdfLink");
-
+const { runWithTenant } = require("../utils/tenantContext");
 const BILLING_ROLES = ["Admin", "Manager", "Sales", "Finance"];
 
 module.exports = {
@@ -253,14 +253,12 @@ module.exports = {
             const modal = new ModalBuilder()
               .setCustomId(`email_modal_${invoice.id}`)
               .setTitle("Send Invoice to Client");
-
             const emailInput = new TextInputBuilder()
               .setCustomId("client_email")
               .setLabel("Client Email Address")
               .setPlaceholder("example@gmail.com")
               .setStyle(TextInputStyle.Short)
               .setRequired(true);
-
             modal.addComponents(new ActionRowBuilder().addComponents(emailInput));
             await i.showModal(modal);
 
@@ -270,12 +268,14 @@ module.exports = {
                   mi.customId === `email_modal_${invoice.id}` && mi.user.id === i.user.id,
                 time: 60000,
               });
-
               const clientEmail = modalSubmit.fields.getTextInputValue("client_email");
               await modalSubmit.deferReply({ flags: MessageFlags.Ephemeral });
 
-              await axios.post(`/invoices/${invoice.id}/send`, {
-                email: clientEmail,
+              // 🔥 THE FIX: Wrap the API call in the tenant context so the header is attached!
+              await runWithTenant(interaction.guildId, async () => {
+                await axios.post(`/invoices/${invoice.id}/send`, {
+                  email: clientEmail,
+                });
               });
 
               await modalSubmit.editReply(
@@ -289,17 +289,21 @@ module.exports = {
                   .setStyle(ButtonStyle.Success)
                   .setDisabled(true)
               );
-
               const pdfRow = new ActionRowBuilder().addComponents(
                 new ButtonBuilder()
                   .setLabel("📄 Save as PDF")
                   .setStyle(ButtonStyle.Link)
                   .setURL(buildPdfUrl(invoice.id))
               );
-
               await interaction.editReply({ components: [emailRow, pdfRow] });
             } catch (err) {
               console.error("Modal error or timeout:", err);
+              // Fallback error message so the modal doesn't just hang
+              if (err.response?.status === 400) {
+                console.error(
+                  "❌ 400 Error: Tenant context was likely lost or workspace header missing."
+                );
+              }
             }
           }
         });
