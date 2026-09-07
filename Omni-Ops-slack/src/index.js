@@ -12,8 +12,11 @@ const configCmd = require("./commands/config");
 const employeeCmd = require("./commands/employee");
 const teamJoinEvent = require("./events/teamJoin");
 const taskCmd = require("./commands/task");
+const appointmentCmd = require("./commands/appointment");
+const calendarCmd = require("./commands/calendar");
 const employeeOptions = require("./options/employeeOptions");
 const taskOptions = require("./options/taskOptions");
+const calendarOptions = require("./options/calendarOptions");
 const { startScheduler } = require("./cron/scheduler");
 
 const SCOPES = [
@@ -126,8 +129,22 @@ app.command("/omni-task", taskCmd.handleTaskCommand);
 app.view("task_create_modal", taskCmd.handleTaskViewSubmit);
 app.view("task_delete_modal", taskCmd.handleTaskDeleteViewSubmit);
 
+// Phase 4: appointments and events
+app.command("/omni-appointment", appointmentCmd.handleAppointmentCommand);
+app.view("appointment_create_modal", appointmentCmd.handleAppointmentCreateSubmit);
+app.view("appointment_edit_modal", appointmentCmd.handleAppointmentEditSubmit);
+app.view("appointment_delete_modal", appointmentCmd.handleAppointmentDeleteSubmit);
+
+app.command("/omni-calendar", calendarCmd.handleCalendarCommand);
+app.view("event_create_modal", calendarCmd.handleEventCreateSubmit);
+app.view("event_delete_modal", calendarCmd.handleEventDeleteSubmit);
+
+// Typeahead sources for external selects
 app.options("employee", employeeOptions.handleEmployeeOptions);
+app.options("employee_multi", employeeOptions.handleEmployeeOptions);
 app.options("task_select", taskOptions.handleTaskOptions);
+app.options("appointment_select", calendarOptions.handleAppointmentOptions);
+app.options("event_select", calendarOptions.handleEventOptions);
 
 // Startup: self-registration for single-token mode, then Socket Mode + scheduler
 (async () => {
