@@ -1,0 +1,64 @@
+{
+  "display_information": {
+    "name": "Omni-Ops",
+    "description": "Multi-tenant workspace management: tasks, CRM, invoices, scheduling and an AI assistant — all inside Slack.",
+    "background_color": "#1a202c"
+  },
+  "features": {
+    "bot_user": { "display_name": "Omni-Ops", "always_online": true },
+    "slash_commands": [
+      {
+        "command": "/omni-ping",
+        "description": "Check Omni-Ops connectivity",
+        "should_escape": false
+      },
+      {
+        "command": "/omni-register",
+        "description": "Link your Slack account to your employee record",
+        "should_escape": false
+      },
+      {
+        "command": "/omni-config",
+        "description": "Configure your Omni-Ops workspace",
+        "should_escape": false
+      },
+      { "command": "/omni-employee", "description": "Manage employees", "should_escape": false },
+      { "command": "/omni-task", "description": "Task management", "should_escape": false },
+      {
+        "command": "/omni-appointment",
+        "description": "Appointments & scheduling",
+        "should_escape": false
+      },
+      { "command": "/omni-invoice", "description": "Invoices & billing", "should_escape": false },
+      {
+        "command": "/omni-dashboard",
+        "description": "Workspace statistics",
+        "should_escape": false
+      }
+    ]
+  },
+  "oauth_config": {
+    "redirect_urls": ["https://YOUR-PUBLIC-URL.up.railway.app/slack/oauth_redirect"],
+    "scopes": {
+      "bot": [
+        "app_mentions:read",
+        "channels:join",
+        "channels:manage",
+        "channels:read",
+        "chat:write",
+        "chat:write.public",
+        "commands",
+        "im:history",
+        "im:write",
+        "reactions:write",
+        "team:read",
+        "users:read",
+        "users:read.email"
+      ]
+    }
+  },
+  "settings": {
+    "socket_mode_enabled": true,
+    "token_rotation_enabled": false
+  }
+}
