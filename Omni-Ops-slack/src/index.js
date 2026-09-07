@@ -115,6 +115,9 @@ app.command("/omni-employee", async ({ command, ack, say, client }) => {
     await employeeCmd.handleEmployeeRegister({ command, ack, say, client });
   } else if (subcommand === "info") {
     await employeeCmd.handleEmployeeInfo({ command, ack, say });
+  } else if (subcommand === "set-admin") {
+    command.text = args.slice(1).join(" ").trim();
+    await employeeCmd.handleEmployeeSetAdmin({ command, ack, say, client });
   } else {
     await say({
       text: "Unknown subcommand",
@@ -123,7 +126,12 @@ app.command("/omni-employee", async ({ command, ack, say, client }) => {
           type: "section",
           text: {
             type: "mrkdwn",
-            text: "❌ Use: `/omni-employee link <email>`, `register`, or `info`",
+            text:
+              "*Available subcommands:*\n" +
+              "• `/omni-employee link <email>` — Link a Slack account to an employee record\n" +
+              "• `/omni-employee register` — Register yourself (workspace owner becomes Admin)\n" +
+              "• `/omni-employee info` — View your employee record\n" +
+              "• `/omni-employee set-admin <email|@user>` — Promote to Admin (Admin only)",
           },
         },
       ],
