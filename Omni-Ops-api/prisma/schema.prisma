@@ -43,7 +43,9 @@ model Workspace {
   googleAccountingSheetId String?
   googleScheduleSheetId   String?
   googlePersonalSheetId   String?
-
+  // Per-tenant Slack connection (OAuth install, encrypted bot token)
+  slackBotToken    String?
+  slackBotUserId   String?
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 

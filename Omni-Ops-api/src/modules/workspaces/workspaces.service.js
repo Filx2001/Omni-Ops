@@ -14,6 +14,33 @@ function encrypt(text) {
   return `${iv.toString("hex")}:${encrypted}`;
 }
 
+// 🔥 NEW: Decrypts sensitive fields (like Slack Bot Tokens)
+function decrypt(text) {
+  if (!text || !process.env.SECRET_ENCRYPTION_KEY) return text;
+  // If it doesn't look like our encrypted format (iv:hex), return as is
+  if (typeof text !== "string" || !text.includes(":")) return text;
+
+  const parts = text.split(":");
+  if (parts.length !== 2) return text;
+
+  const iv = Buffer.from(parts[0], "hex");
+  const encrypted = parts[1];
+
+  try {
+    const decipher = crypto.createDecipheriv(
+      "aes-256-cbc",
+      Buffer.from(process.env.SECRET_ENCRYPTION_KEY, "hex"),
+      iv
+    );
+    let decrypted = decipher.update(encrypted, "hex", "utf8");
+    decrypted += decipher.final("utf8");
+    return decrypted;
+  } catch (err) {
+    console.error("❌ Decryption failed:", err.message);
+    return text;
+  }
+}
+
 async function seedDefaultRoles(workspaceId) {
   const defaultRoles = [
     { name: "Admin", description: "Full system access" },
@@ -63,10 +90,25 @@ async function updateByExternal(platform, workspaceId, data) {
   let ws = await getByExternal(platform, workspaceId);
   if (!ws) ws = await create({ platform, workspaceId });
   const updateData = { ...data };
+
   if (data.aiApiKey !== undefined) {
     updateData.aiApiKey = data.aiApiKey === null ? null : encrypt(data.aiApiKey);
   }
+  if (data.slackBotToken !== undefined) {
+    updateData.slackBotToken = data.slackBotToken === null ? null : encrypt(data.slackBotToken);
+  }
+
   return prisma.workspace.update({ where: { id: ws.id }, data: updateData });
+}
+
+// 🔥 NEW: Returns the DECRYPTED Slack credentials for the bot to use
+async function getSlackCredentials(workspaceId) {
+  const ws = await getByExternal("SLACK", workspaceId);
+  if (!ws) return null;
+  return {
+    botToken: decrypt(ws.slackBotToken),
+    botUserId: ws.slackBotUserId,
+  };
 }
 
 const getOrCreateByPlatform = (platform, workspaceId, guildName = null) =>
@@ -80,6 +122,7 @@ module.exports = {
   getByExternal,
   create,
   updateByExternal,
+  getSlackCredentials,
   getOrCreateByPlatform,
   updateWorkspace,
 };

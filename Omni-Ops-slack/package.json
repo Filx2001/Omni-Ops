@@ -1,0 +1,15 @@
+{
+  "name": "omni-ops-slack",
+  "version": "1.0.0",
+  "description": "Slack companion bot for Omni-Ops",
+  "main": "src/index.js",
+  "scripts": {
+    "start": "node src/index.js",
+    "dev": "node --watch src/index.js"
+  },
+  "dependencies": {
+    "@slack/bolt": "^3.22.0",
+    "axios": "^1.7.9",
+    "dotenv": "^16.4.7"
+  }
+}

@@ -1,7 +1,6 @@
 const router = require("express").Router();
 const svc = require("./workspaces.service");
 
-// GET /workspaces — list all (used by the bot's cron engines)
 router.get("/", async (req, res, next) => {
   try {
     res.json(await svc.list());
@@ -10,7 +9,6 @@ router.get("/", async (req, res, next) => {
   }
 });
 
-// GET /workspaces/discord/:workspaceId — 404 if not found (bot onboarding relies on this)
 router.get("/discord/:workspaceId", async (req, res, next) => {
   try {
     const ws = await svc.getByExternal("DISCORD", req.params.workspaceId);
@@ -21,7 +19,27 @@ router.get("/discord/:workspaceId", async (req, res, next) => {
   }
 });
 
-// POST /workspaces — create (idempotent) + seed default roles
+router.get("/slack/:workspaceId", async (req, res, next) => {
+  try {
+    const ws = await svc.getByExternal("SLACK", req.params.workspaceId);
+    if (!ws) return res.status(404).json({ error: "Workspace not found" });
+    res.json(ws);
+  } catch (err) {
+    next(err);
+  }
+});
+
+// 🔥 NEW: Internal route for the Slack bot to get the decrypted token
+router.get("/slack/:workspaceId/credentials", async (req, res, next) => {
+  try {
+    const creds = await svc.getSlackCredentials(req.params.workspaceId);
+    if (!creds) return res.status(404).json({ error: "Credentials not found" });
+    res.json(creds);
+  } catch (err) {
+    next(err);
+  }
+});
+
 router.post("/", async (req, res, next) => {
   try {
     const { platform, workspaceId, organizationName } = req.body || {};
@@ -33,10 +51,17 @@ router.post("/", async (req, res, next) => {
   }
 });
 
-// PATCH /workspaces/discord/:workspaceId — update settings / secrets (upsert)
 router.patch("/discord/:workspaceId", async (req, res, next) => {
   try {
     res.json(await svc.updateByExternal("DISCORD", req.params.workspaceId, req.body || {}));
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.patch("/slack/:workspaceId", async (req, res, next) => {
+  try {
+    res.json(await svc.updateByExternal("SLACK", req.params.workspaceId, req.body || {}));
   } catch (err) {
     next(err);
   }
