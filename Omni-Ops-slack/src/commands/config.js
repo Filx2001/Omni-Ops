@@ -78,11 +78,19 @@ module.exports = {
       const workspace = response.data;
       const blocks = await buildConfigPanel(workspace, slackUserId);
 
-      await say({ blocks, response_type: "ephemeral" });
+      await say({
+        text: "Omni-Ops Response", // ⚠️ Fallback added
+        blocks,
+        response_type: "ephemeral",
+      });
     } catch (error) {
       console.error("Config command error:", error.message);
       const blocks = buildErrorBlock(`Failed to load config: ${error.message}`);
-      await say({ blocks, response_type: "ephemeral" });
+      await say({
+        text: "Omni-Ops Response", // ⚠️ Fallback added
+        blocks,
+        response_type: "ephemeral",
+      });
     }
   },
 
@@ -147,7 +155,11 @@ module.exports = {
     } catch (error) {
       console.error("Config action error:", error.message);
       const blocks = buildErrorBlock(`Action failed: ${error.message}`);
-      await say({ blocks, response_type: "ephemeral" });
+      await say({
+        text: "Omni-Ops Response", // ⚠️ Fallback added
+        blocks,
+        response_type: "ephemeral",
+      });
     }
   },
 
@@ -165,7 +177,11 @@ module.exports = {
         });
 
         const blocks = buildSuccessBlock(`✅ Timezone updated to *${tz}*`);
-        await say({ blocks, response_type: "ephemeral" });
+        await say({
+          text: "Omni-Ops Response", // ⚠️ Fallback added
+          blocks,
+          response_type: "ephemeral",
+        });
       } else if (callbackId === "config_modal_cur") {
         const currency = view.state.values.cur_block.currency.value.trim().toUpperCase();
 
@@ -179,14 +195,22 @@ module.exports = {
         });
 
         const blocks = buildSuccessBlock(`✅ Currency updated to *${currency}*`);
-        await say({ blocks, response_type: "ephemeral" });
+        await say({
+          text: "Omni-Ops Response", // ⚠️ Fallback added
+          blocks,
+          response_type: "ephemeral",
+        });
       }
 
       await ack();
     } catch (error) {
       console.error("Config view submit error:", error.message);
       const blocks = buildErrorBlock(`Failed to save: ${error.message}`);
-      await say({ blocks, response_type: "ephemeral" });
+      await say({
+        text: "Omni-Ops Response", // ⚠️ Fallback added
+        blocks,
+        response_type: "ephemeral",
+      });
       await ack();
     }
   },

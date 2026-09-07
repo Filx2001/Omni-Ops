@@ -42,6 +42,7 @@ module.exports = {
         // Send welcome DM with registration instructions
         await client.chat.postMessage({
           channel: userId,
+          text: "Welcome to Omni-Ops! Please register your account.", // ⚠️ Fallback added
           blocks: [
             {
               type: "header",
@@ -86,16 +87,8 @@ module.exports = {
 
       // Auto-invite to configured channels (if any)
       const channelsToInvite = [];
-
-      // Add welcome channel if configured
-      if (workspace.welcomeChannelId) {
-        channelsToInvite.push(workspace.welcomeChannelId);
-      }
-
-      // Add intro channel if configured
-      if (workspace.introChannelId) {
-        channelsToInvite.push(workspace.introChannelId);
-      }
+      if (workspace.welcomeChannelId) channelsToInvite.push(workspace.welcomeChannelId);
+      if (workspace.introChannelId) channelsToInvite.push(workspace.introChannelId);
 
       for (const channelId of channelsToInvite) {
         try {
@@ -112,6 +105,7 @@ module.exports = {
       // Send welcome DM
       await client.chat.postMessage({
         channel: userId,
+        text: `Welcome, ${employee.name}! You've been linked to your employee record.`, // ⚠️ Fallback added
         blocks: [
           {
             type: "header",

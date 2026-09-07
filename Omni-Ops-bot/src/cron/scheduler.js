@@ -3,16 +3,8 @@ const axios = require("../utils/axiosInstance");
 const { notifyReminder } = require("../utils/dmNotifier");
 const { runWithTenant } = require("../utils/tenantContext");
 
-/**
- * Standard 30-minute warning window.
- */
 const STANDARD_MAX_MINUTES = 30;
 const STANDARD_MIN_MINUTES = -5;
-
-/**
- * Custom reminders (e.g. "1 day before") may fire up to 60 min late.
- * Invisible for hour/day-scale reminders, but very restart-resistant.
- */
 const CUSTOM_SLACK_MINUTES = 60;
 
 function diffMinutes(dateValue) {
@@ -62,17 +54,16 @@ function startScheduler(client) {
       const workspaces = wsRes.data || [];
 
       for (const ws of workspaces) {
+        // 🔥 CRITICAL FIX: Skip non-Discord workspaces to prevent DM crashes
+        if (ws.platform !== "DISCORD") continue;
+
         await runWithTenant(ws.workspaceId, async () => {
           try {
             const pendingRes = await axios.get("/reminders/pending").catch(() => ({ data: {} }));
-
             const { tasks = [], appointments = [], events = [] } = pendingRes.data || {};
-
             const sent = emptySent();
 
-            /**
-             * TASK REMINDERS (standard + custom)
-             */
+            // TASK REMINDERS
             for (const task of tasks) {
               const emp = task?.assignedTo;
               if (!emp?.externalId || !task.dueDate) continue;
@@ -114,9 +105,7 @@ function startScheduler(client) {
               }
             }
 
-            /**
-             * APPOINTMENT REMINDERS (standard + custom)
-             */
+            // APPOINTMENT REMINDERS
             for (const appointment of appointments) {
               const emp = appointment?.assignee;
               if (!emp?.externalId || !appointment.startTime) continue;
@@ -164,9 +153,7 @@ function startScheduler(client) {
               }
             }
 
-            /**
-             * EVENT REMINDERS (standard only — events have many assignees)
-             */
+            // EVENT REMINDERS
             for (const event of events) {
               if (!event?.startDate || event.reminderSent) continue;
               if (!inStandardWindow(event.startDate)) continue;
@@ -174,7 +161,6 @@ function startScheduler(client) {
               const targets = (event.assignees || []).filter(
                 (a) => a?.externalId && a.reminderEnabled !== false
               );
-
               if (!targets.length) {
                 sent.standard.eventIds.push(event.id);
                 continue;
@@ -195,13 +181,10 @@ function startScheduler(client) {
                   console.error(`❌ Event reminder failed (${event.id}):`, error.message);
                 }
               }
-
               if (anySuccess) sent.standard.eventIds.push(event.id);
             }
 
-            /**
-             * MARK SENT IN DATABASE
-             */
+            // MARK SENT
             if (hasSent(sent)) {
               await axios.post("/reminders/mark-sent", sent).catch((error) => {
                 console.error(
@@ -219,8 +202,7 @@ function startScheduler(client) {
       console.error("❌ Scheduler Core Error:", error.message);
     }
   });
-
-  console.log("✅ Global Scheduler Engine started!");
+  console.log("✅ Global Scheduler Engine started (Discord filtered)!");
 }
 
 module.exports = { startScheduler };

@@ -81,11 +81,19 @@ module.exports = {
           `*Slack User:* <@${targetSlackId}>`
       );
 
-      await say({ blocks, response_type: "ephemeral" });
+      await say({
+        text: "Omni-Ops Response", // ⚠️ Fallback added
+        blocks,
+        response_type: "ephemeral",
+      });
     } catch (error) {
       console.error("Employee link error:", error.message);
       const blocks = buildErrorBlock(`❌ Failed to link employee: ${error.message}`);
-      await say({ blocks, response_type: "ephemeral" });
+      await say({
+        text: "Omni-Ops Response", // ⚠️ Fallback added
+        blocks,
+        response_type: "ephemeral",
+      });
     }
   },
 
@@ -148,11 +156,19 @@ module.exports = {
           `*Role:* ${employee.role?.name || "Pending assignment"}`
       );
 
-      await say({ blocks, response_type: "ephemeral" });
+      await say({
+        text: "Omni-Ops Response", // ⚠️ Fallback added
+        blocks,
+        response_type: "ephemeral",
+      });
     } catch (error) {
       console.error("Employee register error:", error.message);
       const blocks = buildErrorBlock(`❌ Registration failed: ${error.message}`);
-      await say({ blocks, response_type: "ephemeral" });
+      await say({
+        text: "Omni-Ops Response", // ⚠️ Fallback added
+        blocks,
+        response_type: "ephemeral",
+      });
     }
   },
 
@@ -194,13 +210,21 @@ module.exports = {
         },
       ];
 
-      await say({ blocks, response_type: "ephemeral" });
+      await say({
+        text: "Omni-Ops Response", // ⚠️ Fallback added
+        blocks,
+        response_type: "ephemeral",
+      });
     } catch (error) {
       console.error("Employee info error:", error.message);
       const blocks = buildErrorBlock(
         "❌ You're not registered yet. Use `/omni-employee register` to get started."
       );
-      await say({ blocks, response_type: "ephemeral" });
+      await say({
+        text: "Omni-Ops Response", // ⚠️ Fallback added
+        blocks,
+        response_type: "ephemeral",
+      });
     }
   },
 };

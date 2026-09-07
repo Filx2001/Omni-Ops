@@ -9,6 +9,11 @@ const configCmd = require("./commands/config");
 const employeeCmd = require("./commands/employee");
 const teamJoinEvent = require("./events/teamJoin");
 
+// 🔥 Phase 3 Imports
+const taskCmd = require("./commands/task");
+const employeeOptions = require("./options/employeeOptions");
+const { startScheduler } = require("./cron/scheduler");
+
 const SCOPES = [
   "app_mentions:read",
   "channels:join",
@@ -25,8 +30,6 @@ const SCOPES = [
   "users:read.email",
 ];
 
-// Mode 1 (single workspace): SLACK_BOT_TOKEN set → dashboard-installed bot
-// Mode 2 (multi-tenant SaaS): no SLACK_BOT_TOKEN → full OAuth install flow
 const useOAuth = !process.env.SLACK_BOT_TOKEN;
 
 const appOptions = {
@@ -55,12 +58,24 @@ app.command("/omni-ping", async ({ command, ack, say }) => {
   await runWithTenant(command.team_id, async () => {
     const { getWorkspace } = require("./utils/workspace");
     const ws = await getWorkspace(command.team_id);
-    await say(`🏓 Pong! Connected to *${ws.organizationName}* _(platform: ${ws.platform})_`);
+    await say({
+      text: "Pong",
+      blocks: [
+        {
+          type: "section",
+          text: {
+            type: "mrkdwn",
+            text: `🏓 Pong! Connected to *${ws.organizationName}* _(platform: ${ws.platform})_`,
+          },
+        },
+      ],
+      response_type: "ephemeral",
+    });
   });
 });
 
 // ==========================================
-// 🔥 Phase 2: Config Commands & Actions
+// 🔥 Phase 2: Config & Employee
 // ==========================================
 app.command("/omni-config", configCmd.handleConfigCommand);
 app.action("config_set_tz", configCmd.handleConfigAction);
@@ -68,18 +83,12 @@ app.action("config_set_cur", configCmd.handleConfigAction);
 app.view("config_modal_tz", configCmd.handleConfigViewSubmit);
 app.view("config_modal_cur", configCmd.handleConfigViewSubmit);
 
-// ==========================================
-// 🔥 Phase 2: Employee Commands
-// ==========================================
-// Slack passes raw text, so we manually parse subcommands here
 app.command("/omni-employee", async ({ command, ack, say, client }) => {
   await ack();
   const args = command.text.trim().split(/\s+/);
   const subcommand = args[0]?.toLowerCase();
-
   if (subcommand === "link") {
-    const email = args.slice(1).join(" ").trim();
-    command.text = email; // Override to match the handler's expectation
+    command.text = args.slice(1).join(" ").trim();
     await employeeCmd.handleEmployeeLink({ command, ack, say, client });
   } else if (subcommand === "register") {
     await employeeCmd.handleEmployeeRegister({ command, ack, say, client });
@@ -87,16 +96,13 @@ app.command("/omni-employee", async ({ command, ack, say, client }) => {
     await employeeCmd.handleEmployeeInfo({ command, ack, say });
   } else {
     await say({
+      text: "Unknown subcommand",
       blocks: [
         {
           type: "section",
           text: {
             type: "mrkdwn",
-            text:
-              "❌ Unknown subcommand. Use:\n" +
-              "• `/omni-employee link <email>`\n" +
-              "• `/omni-employee register`\n" +
-              "• `/omni-employee info`",
+            text: "❌ Use: `/omni-employee link <email>`, `register`, or `info`",
           },
         },
       ],
@@ -105,16 +111,21 @@ app.command("/omni-employee", async ({ command, ack, say, client }) => {
   }
 });
 
-// ==========================================
-// 🔥 Phase 2: Events
-// ==========================================
 app.event("team_join", teamJoinEvent.handleTeamJoin);
+
+// ==========================================
+// 🔥 Phase 3: Tasks & Options
+// ==========================================
+app.command("/omni-task", taskCmd.handleTaskCommand);
+app.view("task_create_modal", taskCmd.handleTaskViewSubmit);
+
+// Typeahead for employee selection in modals
+app.options("employee", employeeOptions.handleEmployeeOptions);
 
 // ==========================================
 // 🔥 Startup & Self-Registration
 // ==========================================
 (async () => {
-  // Single-token mode: self-register this installation with the API on startup
   if (!useOAuth) {
     try {
       const auth = await app.client.auth.test();
@@ -125,11 +136,8 @@ app.event("team_join", teamJoinEvent.handleTeamJoin);
             workspaceId: auth.team_id,
             organizationName: auth.team?.name || "Slack Workspace",
           })
-          .catch(() => {}); // ignore if it already exists
-
-        await axios.patch(`/workspaces/slack/${auth.team_id}`, {
-          slackBotUserId: auth.user_id,
-        });
+          .catch(() => {});
+        await axios.patch(`/workspaces/slack/${auth.team_id}`, { slackBotUserId: auth.user_id });
       });
       console.log(`✅ Registered Slack workspace ${auth.team_id} with the API`);
     } catch (err) {
@@ -139,4 +147,7 @@ app.event("team_join", teamJoinEvent.handleTeamJoin);
 
   await app.start();
   console.log("⚡ Omni-Ops Slack bot is running (Socket Mode)!");
+
+  // 🔥 Start the Slack-specific scheduler
+  startScheduler(app);
 })();
