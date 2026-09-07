@@ -1,19 +1,28 @@
+/**
+ * Omni-Ops Slack Bot - Main Entry Point
+ *
+ * Initializes the Slack Bolt app with Socket Mode.
+ * Registers all command handlers, event listeners, and action handlers.
+ *
+ * @module index
+ */
+
 require("dotenv").config();
 const { App } = require("@slack/bolt");
 const axios = require("./utils/axiosInstance");
 const { runWithTenant } = require("./utils/tenantContext");
 const installationStore = require("./utils/installationStore");
 
-// 🔥 Phase 2 Imports
+// Phase 2 imports
 const configCmd = require("./commands/config");
 const employeeCmd = require("./commands/employee");
 const teamJoinEvent = require("./events/teamJoin");
 
-// 🔥 Phase 3 Imports
+// Phase 3 imports
 const taskCmd = require("./commands/task");
 const employeeOptions = require("./options/employeeOptions");
-const { startScheduler } = require("./cron/scheduler");
 
+// Required OAuth scopes for the Slack app
 const SCOPES = [
   "app_mentions:read",
   "channels:join",
@@ -30,14 +39,23 @@ const SCOPES = [
   "users:read.email",
 ];
 
+/**
+ * Determines whether to use OAuth flow or single-token mode.
+ * - SLACK_BOT_TOKEN set = Single workspace (dashboard-installed)
+ * - No SLACK_BOT_TOKEN = Multi-tenant SaaS with OAuth
+ */
 const useOAuth = !process.env.SLACK_BOT_TOKEN;
 
+/**
+ * Base configuration for the Slack Bolt app
+ */
 const appOptions = {
   signingSecret: process.env.SLACK_SIGNING_SECRET,
   socketMode: true,
   appToken: process.env.SLACK_APP_TOKEN,
 };
 
+// Add OAuth configuration if in multi-tenant mode
 if (useOAuth) {
   appOptions.clientId = process.env.SLACK_CLIENT_ID;
   appOptions.clientSecret = process.env.SLACK_CLIENT_SECRET;
@@ -45,13 +63,15 @@ if (useOAuth) {
   appOptions.scopes = SCOPES;
   appOptions.installationStore = installationStore;
 } else {
+  // Single-token mode
   appOptions.token = process.env.SLACK_BOT_TOKEN;
 }
 
+// Initialize the Slack app
 const app = new App(appOptions);
 
 // ==========================================
-// 🔥 Phase 0: Test Command
+// Phase 0: Test Command
 // ==========================================
 app.command("/omni-ping", async ({ command, ack, say }) => {
   await ack();
@@ -75,7 +95,7 @@ app.command("/omni-ping", async ({ command, ack, say }) => {
 });
 
 // ==========================================
-// 🔥 Phase 2: Config & Employee
+// Phase 2: Config & Employee Commands
 // ==========================================
 app.command("/omni-config", configCmd.handleConfigCommand);
 app.action("config_set_tz", configCmd.handleConfigAction);
@@ -87,6 +107,7 @@ app.command("/omni-employee", async ({ command, ack, say, client }) => {
   await ack();
   const args = command.text.trim().split(/\s+/);
   const subcommand = args[0]?.toLowerCase();
+
   if (subcommand === "link") {
     command.text = args.slice(1).join(" ").trim();
     await employeeCmd.handleEmployeeLink({ command, ack, say, client });
@@ -114,18 +135,19 @@ app.command("/omni-employee", async ({ command, ack, say, client }) => {
 app.event("team_join", teamJoinEvent.handleTeamJoin);
 
 // ==========================================
-// 🔥 Phase 3: Tasks & Options
+// Phase 3: Task Commands & Modals
 // ==========================================
 app.command("/omni-task", taskCmd.handleTaskCommand);
 app.view("task_create_modal", taskCmd.handleTaskViewSubmit);
 
-// Typeahead for employee selection in modals
+// Employee typeahead for modals (external_select)
 app.options("employee", employeeOptions.handleEmployeeOptions);
 
 // ==========================================
-// 🔥 Startup & Self-Registration
+// Startup & Self-Registration
 // ==========================================
 (async () => {
+  // Single-token mode: Register workspace on startup
   if (!useOAuth) {
     try {
       const auth = await app.client.auth.test();
@@ -136,8 +158,11 @@ app.options("employee", employeeOptions.handleEmployeeOptions);
             workspaceId: auth.team_id,
             organizationName: auth.team?.name || "Slack Workspace",
           })
-          .catch(() => {});
-        await axios.patch(`/workspaces/slack/${auth.team_id}`, { slackBotUserId: auth.user_id });
+          .catch(() => {}); // Ignore if already exists
+
+        await axios.patch(`/workspaces/slack/${auth.team_id}`, {
+          slackBotUserId: auth.user_id,
+        });
       });
       console.log(`✅ Registered Slack workspace ${auth.team_id} with the API`);
     } catch (err) {
@@ -146,8 +171,5 @@ app.options("employee", employeeOptions.handleEmployeeOptions);
   }
 
   await app.start();
-  console.log("⚡ Omni-Ops Slack bot is running (Socket Mode)!");
-
-  // 🔥 Start the Slack-specific scheduler
-  startScheduler(app);
+  console.log(" Omni-Ops Slack bot is running (Socket Mode)!");
 })();
