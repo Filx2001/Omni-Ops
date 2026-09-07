@@ -1,7 +1,7 @@
 const axios = require("../utils/axiosInstance");
 const { runWithTenant } = require("../utils/tenantContext");
 const { buildSuccessBlock, buildErrorBlock } = require("../utils/slackBlocks");
-
+const { sendDm } = require("../utils/slackDm");
 const TIMEZONE_OPTIONS = [
   { text: { type: "plain_text", text: "🌐 UTC (GMT)" }, value: "UTC" },
   { text: { type: "plain_text", text: "🇬🇧 London" }, value: "Europe/London" },
@@ -164,54 +164,48 @@ module.exports = {
   },
 
   // View submission handler
-  async handleConfigViewSubmit({ view, ack, say, client }) {
-    const workspaceId = view.team_id;
+  async handleConfigViewSubmit({ body, view, ack, client }) {
+    const workspaceId = body.team?.id || view.team_id;
+    const userId = body.user?.id;
     const callbackId = view.callback_id;
+    const errorBlockId = callbackId === "config_modal_tz" ? "tz_block" : "cur_block";
 
     try {
       if (callbackId === "config_modal_tz") {
         const tz = view.state.values.tz_block.timezone.selected_option.value;
-
-        await runWithTenant(workspaceId, async () => {
-          await axios.patch(`/workspaces/slack/${workspaceId}`, { timezone: tz });
-        });
-
-        const blocks = buildSuccessBlock(`✅ Timezone updated to *${tz}*`);
-        await say({
-          text: "Omni-Ops Response", // ⚠️ Fallback added
-          blocks,
-          response_type: "ephemeral",
+        await runWithTenant(workspaceId, () =>
+          axios.patch(`/workspaces/slack/${workspaceId}`, { timezone: tz })
+        );
+        await ack();
+        await sendDm(client, userId, {
+          text: `Timezone updated to ${tz}`,
+          blocks: buildSuccessBlock(`Timezone updated to *${tz}*.`),
         });
       } else if (callbackId === "config_modal_cur") {
-        const currency = view.state.values.cur_block.currency.value.trim().toUpperCase();
-
+        const currency = (view.state.values.cur_block.currency.value || "").trim().toUpperCase();
         if (!/^[A-Z]{3}$/.test(currency)) {
-          const blocks = buildErrorBlock(" Invalid currency. Use 3-letter code (e.g., USD).");
-          return say({ blocks, response_type: "ephemeral" });
+          return ack({
+            response_action: "errors",
+            errors: { cur_block: "Use a 3-letter code like USD or EUR." },
+          });
         }
-
-        await runWithTenant(workspaceId, async () => {
-          await axios.patch(`/workspaces/slack/${workspaceId}`, { currency });
+        await runWithTenant(workspaceId, () =>
+          axios.patch(`/workspaces/slack/${workspaceId}`, { currency })
+        );
+        await ack();
+        await sendDm(client, userId, {
+          text: `Currency updated to ${currency}`,
+          blocks: buildSuccessBlock(`Currency updated to *${currency}*.`),
         });
-
-        const blocks = buildSuccessBlock(`✅ Currency updated to *${currency}*`);
-        await say({
-          text: "Omni-Ops Response", // ⚠️ Fallback added
-          blocks,
-          response_type: "ephemeral",
-        });
+      } else {
+        await ack();
       }
-
-      await ack();
     } catch (error) {
       console.error("Config view submit error:", error.message);
-      const blocks = buildErrorBlock(`Failed to save: ${error.message}`);
-      await say({
-        text: "Omni-Ops Response", // ⚠️ Fallback added
-        blocks,
-        response_type: "ephemeral",
+      await ack({
+        response_action: "errors",
+        errors: { [errorBlockId]: `Save failed: ${error.response?.data?.error || error.message}` },
       });
-      await ack();
     }
   },
 };

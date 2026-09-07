@@ -1,43 +1,26 @@
-/**
- * Task Management Command Handler
- *
- * Handles /omni-task slash command with modal-first UX.
- * Supports: create, list, delete subcommands.
- *
- * @module commands/task
- */
-
+//omni-task command: modal-first task management for Slack.
 const axios = require("../utils/axiosInstance");
 const { runWithTenant } = require("../utils/tenantContext");
 const { buildTaskBlock, buildErrorBlock, buildSuccessBlock } = require("../utils/slackBlocks");
 const { parseSlackDateTime, isValidYear } = require("../utils/slackDates");
 const { buildCreateTaskModal } = require("../utils/slackModals");
+const { sendDm } = require("../utils/slackDm");
 
-/**
- * Checks if a Slack user has Manager or Admin role.
- *
- * @param {string} slackUserId - The Slack user ID
- * @param {string} workspaceId - The workspace ID for tenant context
- * @returns {Promise<boolean>} True if user is Manager or Admin
- */
-async function checkIsManager(slackUserId, workspaceId) {
+const MANAGEMENT_ROLES = ["Admin", "Manager"];
+
+/** Employee record for a Slack user, or null when unregistered. */
+async function getEmployeeBySlackId(slackUserId, workspaceId) {
   try {
-    const response = await runWithTenant(workspaceId, async () => {
-      return axios.get(`/employees/external/${slackUserId}`);
-    });
-    return ["Admin", "Manager"].includes(response.data?.role?.name);
+    const response = await runWithTenant(workspaceId, () =>
+      axios.get(`/employees/external/${slackUserId}`)
+    );
+    return response.data || null;
   } catch {
-    return false;
+    return null;
   }
 }
 
-/**
- * Formats a date for display in Slack messages.
- * Shows date + time if time is set, otherwise date only.
- *
- * @param {string} dateString - ISO date string
- * @returns {string} Formatted date string
- */
+/** Shows date + time only when a time is actually set. */
 function formatDeadline(dateString) {
   if (!dateString) return "No deadline";
   const d = new Date(dateString);
@@ -48,18 +31,7 @@ function formatDeadline(dateString) {
 }
 
 module.exports = {
-  /**
-   * Main slash command handler for /omni-task
-   *
-   * Routes to appropriate subcommand handler based on user input.
-   * Subcommands: create, list, delete
-   *
-   * @param {Object} params - Command parameters
-   * @param {Object} params.command - Slack command object
-   * @param {Function} params.ack - Acknowledgment function
-   * @param {Function} params.say - Response function
-   * @param {Object} params.client - Slack WebClient
-   */
+  /** Routes /omni-task <subcommand>. */
   async handleTaskCommand({ command, ack, say, client }) {
     await ack();
 
@@ -69,59 +41,44 @@ module.exports = {
     const subcommand = args[0]?.toLowerCase();
 
     try {
-      /**
-       * SUBCOMMAND: create
-       * Opens modal for task creation (Manager/Admin only)
-       */
       if (subcommand === "create") {
-        const isManager = await checkIsManager(slackUserId, workspaceId);
-
-        if (!isManager) {
+        const caller = await getEmployeeBySlackId(slackUserId, workspaceId);
+        if (!MANAGEMENT_ROLES.includes(caller?.role?.name)) {
           return say({
             text: "Permission denied",
             blocks: buildErrorBlock("Only Managers and Admins can create tasks."),
             response_type: "ephemeral",
           });
         }
-
         await client.views.open({
           trigger_id: command.trigger_id,
           view: buildCreateTaskModal(),
         });
       } else if (subcommand === "list") {
-
-      /**
-       * SUBCOMMAND: list
-       * Shows user's assigned tasks
-       */
-        // Fetch requester's employee record
-        const employeeResponse = await runWithTenant(workspaceId, async () => {
-          return axios.get(`/employees/external/${slackUserId}`);
-        });
-
-        const employee = employeeResponse.data;
-
-        // Fetch tasks
-        const tasksResponse = await runWithTenant(workspaceId, async () => {
-          return axios.get(`/tasks/employee/${employee.id}`);
-        });
-
-        const tasks = tasksResponse.data.slice(0, 10); // Limit to 10 for readability
-
-        if (!tasks.length) {
+        const employee = await getEmployeeBySlackId(slackUserId, workspaceId);
+        if (!employee) {
           return say({
-            text: "No tasks found",
-            blocks: buildSuccessBlock("You have no assigned tasks. Great job!"),
+            text: "Not registered",
+            blocks: buildErrorBlock("Run `/omni-employee register` first."),
             response_type: "ephemeral",
           });
         }
 
-        // Build task list blocks
+        const tasksResponse = await runWithTenant(workspaceId, () =>
+          axios.get(`/tasks/employee/${employee.id}`)
+        );
+        const tasks = (tasksResponse.data || []).slice(0, 10);
+
+        if (!tasks.length) {
+          return say({
+            text: "No tasks found",
+            blocks: buildSuccessBlock("You have no assigned tasks."),
+            response_type: "ephemeral",
+          });
+        }
+
         const blocks = [
-          {
-            type: "header",
-            text: { type: "plain_text", text: "📋 Your Tasks", emoji: true },
-          },
+          { type: "header", text: { type: "plain_text", text: "📋 Your Tasks", emoji: true } },
           ...tasks.map((task) => ({
             type: "section",
             text: {
@@ -134,20 +91,10 @@ module.exports = {
           })),
         ];
 
-        await say({
-          text: `Showing ${tasks.length} tasks`,
-          blocks,
-          response_type: "ephemeral",
-        });
+        await say({ text: `Showing ${tasks.length} tasks`, blocks, response_type: "ephemeral" });
       } else if (subcommand === "delete") {
-
-      /**
-       * SUBCOMMAND: delete
-       * Deletes a task by ID (Manager/Admin only)
-       */
-        const isManager = await checkIsManager(slackUserId, workspaceId);
-
-        if (!isManager) {
+        const caller = await getEmployeeBySlackId(slackUserId, workspaceId);
+        if (!MANAGEMENT_ROLES.includes(caller?.role?.name)) {
           return say({
             text: "Permission denied",
             blocks: buildErrorBlock("Only Managers and Admins can delete tasks."),
@@ -156,7 +103,6 @@ module.exports = {
         }
 
         const taskId = args[1];
-
         if (!taskId) {
           return say({
             text: "Missing task ID",
@@ -165,20 +111,13 @@ module.exports = {
           });
         }
 
-        await runWithTenant(workspaceId, async () => {
-          await axios.delete(`/tasks/${taskId}`);
-        });
-
+        await runWithTenant(workspaceId, () => axios.delete(`/tasks/${taskId}`));
         await say({
           text: "Task deleted",
           blocks: buildSuccessBlock(`Task *${taskId}* has been deleted.`),
           response_type: "ephemeral",
         });
       } else {
-
-      /**
-       * SUBCOMMAND: Unknown or missing
-       */
         await say({
           text: "Unknown subcommand",
           blocks: [
@@ -199,111 +138,86 @@ module.exports = {
       }
     } catch (error) {
       console.error("Task command error:", error.message);
-
-      const errorMessage = error.response?.data?.error || error.message;
       await say({
         text: "Error",
-        blocks: buildErrorBlock(`Operation failed: ${errorMessage}`),
+        blocks: buildErrorBlock(
+          `Operation failed: ${error.response?.data?.error || error.message}`
+        ),
         response_type: "ephemeral",
       });
     }
   },
 
   /**
-   * Modal submission handler for task creation
-   *
-   * Processes form data from the create task modal,
-   * validates inputs, and creates the task via API.
-   *
-   * @param {Object} params - View submission parameters
-   * @param {Object} params.view - Slack view object containing form data
-   * @param {Function} params.ack - Acknowledgment function
-   * @param {Function} params.say - Response function
+   * Handles task_create_modal submission.
+   * The submitting user comes from body.user; view handlers have no `say`,
+   * so confirmation is delivered as a DM.
    */
-  async handleTaskViewSubmit({ view, ack, say }) {
-    const workspaceId = view.team_id;
-    const callbackId = view.callback_id;
+  async handleTaskViewSubmit({ body, view, ack, client }) {
+    const workspaceId = body.team?.id || view.team_id;
+    const userId = body.user?.id;
 
     try {
-      if (callbackId === "task_create_modal") {
-        const values = view.state.values;
+      if (view.callback_id !== "task_create_modal") return ack();
 
-        // Extract form values
-        const title = values.title_block?.title?.value;
-        const employeeId = values.employee_block?.employee?.selected_option?.value;
-        const priority = values.priority_block?.priority?.selected_option?.value;
-        const deadline = values.deadline_block?.deadline?.selected_date;
-        const time = values.time_block?.time?.selected_time;
-        const description = values.description_block?.description?.value;
+      const values = view.state.values;
+      const title = values.title_block?.title?.value;
+      const employeeId = values.employee_block?.employee?.selected_option?.value;
+      const priority = values.priority_block?.priority?.selected_option?.value;
+      const deadline = values.deadline_block?.deadline?.selected_date;
+      const time = values.time_block?.time?.selected_time;
+      const description = values.description_block?.description?.value;
 
-        // Validation: Required fields
-        const errors = {};
-        if (!title) errors.title_block = "Title is required";
-        if (!employeeId) errors.employee_block = "Assignee is required";
-        if (!priority) errors.priority_block = "Priority is required";
+      const errors = {};
+      if (!title) errors.title_block = "Title is required";
+      if (!employeeId) errors.employee_block = "Assignee is required";
+      if (!priority) errors.priority_block = "Priority is required";
+      if (Object.keys(errors).length) return ack({ response_action: "errors", errors });
 
-        if (Object.keys(errors).length > 0) {
+      let dueDate = null;
+      if (deadline) {
+        dueDate = parseSlackDateTime(deadline, time || "00:00");
+        if (!dueDate || !isValidYear(dueDate)) {
           return ack({
             response_action: "errors",
-            errors,
+            errors: { deadline_block: "Invalid date. Pick a date in the current year or later." },
           });
         }
+      }
 
-        // Parse deadline with timezone awareness
-        let dueDate = null;
-        if (deadline) {
-          dueDate = parseSlackDateTime(deadline, time || "00:00");
-
-          if (!dueDate || !isValidYear(dueDate)) {
-            return ack({
-              response_action: "errors",
-              errors: {
-                deadline_block: "Invalid date. Please select a valid future date.",
-              },
-            });
-          }
-        }
-
-        // Fetch creator's employee record
-        const creatorResponse = await runWithTenant(workspaceId, async () => {
-          return axios.get(`/employees/external/${view.user.id}`);
-        });
-        const creatorId = creatorResponse.data.id;
-
-        // Create task via API
-        const response = await runWithTenant(workspaceId, async () => {
-          return axios.post(`/tasks`, {
-            title,
-            description: description || null,
-            assignedToId: employeeId,
-            createdById: creatorId,
-            priority,
-            dueDate: dueDate ? dueDate.toISOString() : null,
-          });
-        });
-
-        const task = response.data;
-        const blocks = buildTaskBlock(task, "create");
-
-        // Clear modal and show success
-        await ack({ response_action: "clear" });
-
-        await say({
-          text: "Task created successfully",
-          blocks,
-          response_type: "ephemeral",
+      let creator;
+      try {
+        creator = await runWithTenant(workspaceId, () =>
+          axios.get(`/employees/external/${userId}`)
+        );
+      } catch {
+        return ack({
+          response_action: "errors",
+          errors: { title_block: "You are not registered. Run /omni-employee register first." },
         });
       }
+
+      const response = await runWithTenant(workspaceId, () =>
+        axios.post(`/tasks`, {
+          title,
+          description: description || null,
+          assignedToId: employeeId,
+          createdById: creator.data.id,
+          priority,
+          dueDate: dueDate ? dueDate.toISOString() : null,
+        })
+      );
+
+      await ack({ response_action: "clear" });
+      await sendDm(client, userId, {
+        text: `Task created: ${response.data.title}`,
+        blocks: buildTaskBlock(response.data, "create"),
+      });
     } catch (error) {
       console.error("Task view submit error:", error.message);
-
-      const errorMessage = error.response?.data?.error || error.message;
-
       await ack({
         response_action: "errors",
-        errors: {
-          title_block: `API Error: ${errorMessage}`,
-        },
+        errors: { title_block: `API error: ${error.response?.data?.error || error.message}` },
       });
     }
   },
