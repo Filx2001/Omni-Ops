@@ -1,9 +1,12 @@
-//omni-task command: modal-first task management for Slack.
+/**
+ * /omni-task command: modal-first task management for Slack.
+ */
+
 const axios = require("../utils/axiosInstance");
 const { runWithTenant } = require("../utils/tenantContext");
 const { buildTaskBlock, buildErrorBlock, buildSuccessBlock } = require("../utils/slackBlocks");
 const { parseSlackDateTime, isValidYear } = require("../utils/slackDates");
-const { buildCreateTaskModal } = require("../utils/slackModals");
+const { buildCreateTaskModal, buildDeleteTaskModal } = require("../utils/slackModals");
 const { sendDm } = require("../utils/slackDm");
 
 const MANAGEMENT_ROLES = ["Admin", "Manager"];
@@ -103,19 +106,20 @@ module.exports = {
         }
 
         const taskId = args[1];
-        if (!taskId) {
+
+        // Direct ID path kept for scripts/power users; default is the picker modal
+        if (taskId) {
+          const response = await runWithTenant(workspaceId, () => axios.delete(`/tasks/${taskId}`));
           return say({
-            text: "Missing task ID",
-            blocks: buildErrorBlock("Usage: `/omni-task delete <task_id>`"),
+            text: "Task deleted",
+            blocks: buildSuccessBlock(`Task *${response.data.title}* has been deleted.`),
             response_type: "ephemeral",
           });
         }
 
-        await runWithTenant(workspaceId, () => axios.delete(`/tasks/${taskId}`));
-        await say({
-          text: "Task deleted",
-          blocks: buildSuccessBlock(`Task *${taskId}* has been deleted.`),
-          response_type: "ephemeral",
+        await client.views.open({
+          trigger_id: command.trigger_id,
+          view: buildDeleteTaskModal(),
         });
       } else {
         await say({
@@ -129,7 +133,7 @@ module.exports = {
                   "*Available subcommands:*\n" +
                   "• `/omni-task create` — Create a new task\n" +
                   "• `/omni-task list` — View your tasks\n" +
-                  "• `/omni-task delete <id>` — Delete a task",
+                  "• `/omni-task delete` — Pick a task to delete (or pass an ID)",
               },
             },
           ],
@@ -218,6 +222,46 @@ module.exports = {
       await ack({
         response_action: "errors",
         errors: { title_block: `API error: ${error.response?.data?.error || error.message}` },
+      });
+    }
+  },
+
+  /** Handles task_delete_modal submission. */
+  async handleTaskDeleteViewSubmit({ body, view, ack, client }) {
+    const workspaceId = body.team?.id || view.team_id;
+    const userId = body.user?.id;
+
+    try {
+      if (view.callback_id !== "task_delete_modal") return ack();
+
+      const caller = await getEmployeeBySlackId(userId, workspaceId);
+      if (!MANAGEMENT_ROLES.includes(caller?.role?.name)) {
+        return ack({
+          response_action: "errors",
+          errors: { task_block: "Only Managers and Admins can delete tasks." },
+        });
+      }
+
+      const taskId = view.state.values.task_block?.task_select?.selected_option?.value;
+      if (!taskId) {
+        return ack({
+          response_action: "errors",
+          errors: { task_block: "Select a task to delete." },
+        });
+      }
+
+      const response = await runWithTenant(workspaceId, () => axios.delete(`/tasks/${taskId}`));
+
+      await ack({ response_action: "clear" });
+      await sendDm(client, userId, {
+        text: `Task deleted: ${response.data.title}`,
+        blocks: buildSuccessBlock(`Task *${response.data.title}* has been deleted.`),
+      });
+    } catch (error) {
+      console.error("Task delete view submit error:", error.message);
+      await ack({
+        response_action: "errors",
+        errors: { task_block: `API error: ${error.response?.data?.error || error.message}` },
       });
     }
   },
