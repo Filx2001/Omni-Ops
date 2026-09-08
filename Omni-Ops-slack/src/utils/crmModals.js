@@ -130,7 +130,7 @@ function buildLeadFilterModal() {
 function buildLeadSelectModal(callbackId, title, extraBlocks = []) {
   return {
     type: "modal",
-    callback_id,
+    callback_id: callbackId,
     title: { type: "plain_text", text: title },
     submit: { type: "plain_text", text: "Submit" },
     close: { type: "plain_text", text: "Cancel" },
@@ -138,7 +138,11 @@ function buildLeadSelectModal(callbackId, title, extraBlocks = []) {
       {
         type: "input",
         block_id: "lead_block",
-        element: { type: "external_select", action_id: "lead_select", min_query_length: 1 },
+        element: {
+          type: "external_select",
+          action_id: "lead_select",
+          min_query_length: 1,
+        },
         label: { type: "plain_text", text: "Select Lead" },
       },
       ...extraBlocks,
