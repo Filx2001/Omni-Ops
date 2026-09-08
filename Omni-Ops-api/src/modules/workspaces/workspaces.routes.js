@@ -29,12 +29,21 @@ router.get("/slack/:workspaceId", async (req, res, next) => {
   }
 });
 
-// 🔥 NEW: Internal route for the Slack bot to get the decrypted token
+// Internal route for the Slack bot to get the decrypted bot token
 router.get("/slack/:workspaceId/credentials", async (req, res, next) => {
   try {
     const creds = await svc.getSlackCredentials(req.params.workspaceId);
     if (!creds) return res.status(404).json({ error: "Credentials not found" });
     res.json(creds);
+  } catch (err) {
+    next(err);
+  }
+});
+
+// Internal route: decrypted AI config for the assistant (never exposed to panels)
+router.get("/slack/:workspaceId/ai-config", async (req, res, next) => {
+  try {
+    res.json({ aiConfig: await svc.getAiConfigByExternal("SLACK", req.params.workspaceId) });
   } catch (err) {
     next(err);
   }

@@ -15,7 +15,6 @@ const myCmd = require("./commands/my");
 const invoiceCmd = require("./commands/invoice");
 const leadsCmd = require("./commands/leads");
 const campaignCmd = require("./commands/campaign");
-
 const employeeOptions = require("./options/employeeOptions");
 const taskOptions = require("./options/taskOptions");
 const calendarOptions = require("./options/calendarOptions");
@@ -23,7 +22,7 @@ const invoiceOptions = require("./options/invoiceOptions");
 const crmOptions = require("./options/crmOptions");
 const { startScheduler } = require("./cron/scheduler");
 const { startNotifyServer } = require("./notifyServer");
-
+const assistant = require("./events/assistant");
 const SCOPES = [
   "app_mentions:read",
   "channels:join",
@@ -146,7 +145,10 @@ app.view(/^lead_/, leadsCmd.handleLeadViewSubmit);
 
 app.command("/omni-campaign", campaignCmd.handleCampaignCommand);
 app.view(/^campaign_/, campaignCmd.handleCampaignViewSubmit);
-
+// Phase 7: AI assistant
+app.event("app_mention", assistant.handleAppMention);
+app.message(assistant.handleDirectMessage);
+app.action(/^ai_(confirm|cancel)_/, assistant.handleConfirmation);
 // Typeahead sources
 app.options("employee", employeeOptions.handleEmployeeOptions);
 app.options("employee_multi", employeeOptions.handleEmployeeOptions);

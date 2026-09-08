@@ -113,6 +113,19 @@ const getOrCreateByPlatform = (platform, workspaceId, guildName = null) =>
 const updateWorkspace = (platform, workspaceId, data) =>
   updateByExternal(platform, workspaceId, data);
 
+// Returns the decrypted AI config for a workspace (internal callers only)
+async function getAiConfigByExternal(platform, workspaceId) {
+  const ws = await getByExternal(platform, workspaceId);
+  if (!ws?.aiApiKey) return null;
+  const raw = decrypt(ws.aiApiKey);
+  try {
+    const parsed = JSON.parse(raw);
+    if (parsed?.provider && parsed?.key) return parsed;
+  } catch {}
+  // Legacy raw-key format
+  return { provider: "anthropic", model: null, key: raw, baseUrl: null };
+}
+
 module.exports = {
   list,
   getByExternal,
