@@ -80,10 +80,8 @@ app.command("/omni-ping", async ({ command, ack, say }) => {
 
 // Phase 2: config and employee management
 app.command("/omni-config", configCmd.handleConfigCommand);
-app.action("config_set_tz", configCmd.handleConfigAction);
-app.action("config_set_cur", configCmd.handleConfigAction);
-app.view("config_modal_tz", configCmd.handleConfigViewSubmit);
-app.view("config_modal_cur", configCmd.handleConfigViewSubmit);
+app.action(/^config_/, configCmd.handleConfigAction);
+app.view(/^config_modal_/, configCmd.handleConfigViewSubmit);
 
 app.command("/omni-employee", async ({ command, ack, say, client }) => {
   await ack();
