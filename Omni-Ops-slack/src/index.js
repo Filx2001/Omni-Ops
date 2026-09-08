@@ -13,12 +13,16 @@ const calendarCmd = require("./commands/calendar");
 const dashboardCmd = require("./commands/dashboard");
 const myCmd = require("./commands/my");
 const invoiceCmd = require("./commands/invoice");
+const leadsCmd = require("./commands/leads");
+const campaignCmd = require("./commands/campaign");
 
 const employeeOptions = require("./options/employeeOptions");
 const taskOptions = require("./options/taskOptions");
 const calendarOptions = require("./options/calendarOptions");
 const invoiceOptions = require("./options/invoiceOptions");
+const crmOptions = require("./options/crmOptions");
 const { startScheduler } = require("./cron/scheduler");
+const { startNotifyServer } = require("./notifyServer");
 
 const SCOPES = [
   "app_mentions:read",
@@ -126,9 +130,9 @@ app.command("/omni-calendar", calendarCmd.handleCalendarCommand);
 app.view("event_create_modal", calendarCmd.handleEventCreateSubmit);
 app.view("event_delete_modal", calendarCmd.handleEventDeleteSubmit);
 
-// Phase 5: Dashboard, My, Invoices
 app.command("/omni-dashboard", dashboardCmd.handleDashboardCommand);
 app.command("/omni-my", myCmd.handleMyCommand);
+
 app.command("/omni-invoice", invoiceCmd.handleInvoiceCommand);
 app.view("invoice_create_modal", invoiceCmd.handleCreateSubmit);
 app.view("invoice_status_modal", invoiceCmd.handleStatusSubmit);
@@ -136,12 +140,24 @@ app.view("invoice_delete_modal", invoiceCmd.handleDeleteSubmit);
 app.view(/^invoice_email_modal:/, invoiceCmd.handleEmailSubmit);
 app.action(/^invoice_email_btn:/, invoiceCmd.handleEmailAction);
 
+// Phase 6: CRM and Campaigns
+app.command("/omni-leads", leadsCmd.handleLeadCommand);
+app.view(/^lead_/, leadsCmd.handleLeadViewSubmit);
+
+app.command("/omni-campaign", campaignCmd.handleCampaignCommand);
+app.view(/^campaign_/, campaignCmd.handleCampaignViewSubmit);
+
+// Typeahead sources
 app.options("employee", employeeOptions.handleEmployeeOptions);
 app.options("employee_multi", employeeOptions.handleEmployeeOptions);
 app.options("task_select", taskOptions.handleTaskOptions);
 app.options("appointment_select", calendarOptions.handleAppointmentOptions);
 app.options("event_select", calendarOptions.handleEventOptions);
 app.options("invoice", invoiceOptions.handleInvoiceOptions);
+app.options("lead_select", crmOptions.handleLeadOptions);
+app.options("template", crmOptions.handleTemplateOptions);
+app.options("camp", crmOptions.handleCampaignOptions);
+app.options("emp", employeeOptions.handleEmployeeOptions);
 
 (async () => {
   if (!useOAuth) {
@@ -165,4 +181,5 @@ app.options("invoice", invoiceOptions.handleInvoiceOptions);
   await app.start();
   console.log("Omni-Ops Slack bot is running (Socket Mode)");
   startScheduler(app);
+  startNotifyServer(app.client);
 })();
