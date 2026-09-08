@@ -129,7 +129,6 @@ app.view("event_delete_modal", calendarCmd.handleEventDeleteSubmit);
 // Phase 5: Dashboard, My, Invoices
 app.command("/omni-dashboard", dashboardCmd.handleDashboardCommand);
 app.command("/omni-my", myCmd.handleMyCommand);
-
 app.command("/omni-invoice", invoiceCmd.handleInvoiceCommand);
 app.view("invoice_create_modal", invoiceCmd.handleCreateSubmit);
 app.view("invoice_status_modal", invoiceCmd.handleStatusSubmit);
