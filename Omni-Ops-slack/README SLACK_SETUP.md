@@ -10,7 +10,12 @@ Refresh tokens are stored encrypted per workspace; tenants never share data.
    - Slack: `/omni-config` → Connect Google
    - Discord: `/config setup` → Connect Google
    - Or open `${API_PUBLIC_URL}/google/connect?ws=<server-or-team-id>` directly.
-4. First connect provisions one Calendar and four Sheets for that workspace.
+4. First connect provisions one Calendar and four Sheets for that workspace:
+   - `<org> — Omni-Ops` (Calendar)
+   - `<org> — Leads` (Sheet)
+   - `<org> — Schedule` (Sheet with Appointments + Events tabs)
+   - `<org> — Accounting` (Sheet)
+   - `<org> — Personal Tasks` (Sheet)
 
 ### OAuth consent screen modes
 
