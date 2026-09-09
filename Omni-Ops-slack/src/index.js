@@ -3,7 +3,7 @@ const { App } = require("@slack/bolt");
 const axios = require("./utils/axiosInstance");
 const { runWithTenant } = require("./utils/tenantContext");
 const installationStore = require("./utils/installationStore");
-
+const { getWorkspace } = require("./utils/workspace");
 const configCmd = require("./commands/config");
 const employeeCmd = require("./commands/employee");
 const teamJoinEvent = require("./events/teamJoin");
@@ -57,7 +57,13 @@ if (useOAuth) {
 }
 
 const app = new App(appOptions);
-
+// Warm the workspace cache before every interaction so timezone
+// resolution (resolveTimeZone) always sees the tenant's real timezone.
+app.use(async ({ body, next }) => {
+  const teamId = body.team?.id || body.team_id || body.authorizations?.[0]?.team_id;
+  if (teamId) await getWorkspace(teamId).catch(() => {});
+  await next();
+});
 app.command("/omni-ping", async ({ command, ack, say }) => {
   await ack();
   await runWithTenant(command.team_id, async () => {
