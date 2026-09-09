@@ -122,7 +122,6 @@ async function getAiConfigByExternal(platform, workspaceId) {
     const parsed = JSON.parse(raw);
     if (parsed?.provider && parsed?.key) return parsed;
   } catch {}
-  // Legacy raw-key format
   return { provider: "anthropic", model: null, key: raw, baseUrl: null };
 }
 
@@ -132,6 +131,7 @@ module.exports = {
   create,
   updateByExternal,
   getSlackCredentials,
+  getAiConfigByExternal,
   getOrCreateByPlatform,
   updateWorkspace,
 };
