@@ -1,144 +1,201 @@
 /**
- * Employee management commands for the Slack surface.
- *
- * Slack slash commands accept a single raw text argument, so subcommand
- * routing lives in `src/index.js`. This module exposes one handler per
- * subcommand:
- *
- *   - `link`      Attach a Slack account to an employee record via verified email.
- *   - `register`  Self-service registration. The Slack workspace owner is
- *                 automatically granted the Admin role so every new
- *                 installation has a bootstrap administrator.
- *   - `info`      Show the caller's own employee record.
- *   - `set-admin` Promote a registered employee to Admin (Admin-only).
- *
- * All API calls run inside `runWithTenant` so the shared axios instance
- * attaches the workspace-scoped headers automatically.
- *
- * @module commands/employee
+ * /omni-employee command: link, register, info, set-admin, create, edit, list.
  */
 
 const axios = require("../utils/axiosInstance");
 const { runWithTenant } = require("../utils/tenantContext");
 const { buildSuccessBlock, buildErrorBlock } = require("../utils/slackBlocks");
+const { sendDm } = require("../utils/slackDm");
 
 const MANAGEMENT_ROLES = ["Admin", "Manager"];
 
-/**
- * Resolves an employee record from a Slack user ID.
- *
- * @param {string} slackUserId - Slack user ID (e.g. "U0123ABC").
- * @param {string} workspaceId - Slack team ID used as the tenant key.
- * @returns {Promise<Object|null>} The employee record, or null if not registered.
- */
+/** Employee record for a Slack user, or null when unregistered. */
 async function getEmployeeBySlackId(slackUserId, workspaceId) {
   try {
-    const response = await runWithTenant(workspaceId, () =>
+    const res = await runWithTenant(workspaceId, () =>
       axios.get(`/employees/external/${slackUserId}`)
     );
-    return response.data || null;
+    return res.data || null;
   } catch {
     return null;
   }
 }
 
-/**
- * Returns the workspace's Admin role, creating it if the workspace
- * was seeded before the role existed.
- *
- * @param {string} workspaceId - Tenant key.
- * @returns {Promise<Object>} The Admin role record.
- */
-async function ensureAdminRole(workspaceId) {
-  const rolesResponse = await runWithTenant(workspaceId, () => axios.get(`/roles`));
-  const existing = (rolesResponse.data || []).find((role) => role.name === "Admin");
-  if (existing) return existing;
+/** Returns the caller when they are a Manager/Admin, else null. */
+async function requireManager(slackUserId, workspaceId) {
+  const caller = await getEmployeeBySlackId(slackUserId, workspaceId);
+  return MANAGEMENT_ROLES.includes(caller?.role?.name) ? caller : null;
+}
 
+/** The workspace Admin role, created on demand if missing. */
+async function ensureAdminRole(workspaceId) {
+  const rolesRes = await runWithTenant(workspaceId, () => axios.get(`/roles`));
+  const existing = (rolesRes.data || []).find((role) => role.name === "Admin");
+  if (existing) return existing;
   const created = await runWithTenant(workspaceId, () =>
     axios.post(`/roles`, { name: "Admin", description: "Full system access" })
   );
   return created.data;
 }
 
-/**
- * Bootstrap rule: the Slack workspace owner always ends up with the Admin
- * role. Without this, a fresh installation has no manager and every
- * management command is unreachable.
- *
- * @param {Object} employee - Current employee record.
- * @param {boolean} isWorkspaceOwner - True when the Slack user owns the workspace.
- * @param {string} workspaceId - Tenant key.
- * @returns {Promise<Object>} The (possibly promoted) employee record.
- */
+/** Bootstrap rule: the Slack workspace owner always ends up as Admin. */
 async function promoteToAdminIfOwner(employee, isWorkspaceOwner, workspaceId) {
   if (!isWorkspaceOwner || employee?.role?.name === "Admin") return employee;
-
   const adminRole = await ensureAdminRole(workspaceId);
-  const response = await runWithTenant(workspaceId, () =>
+  const res = await runWithTenant(workspaceId, () =>
     axios.patch(`/employees/${employee.id}/role`, { roleId: adminRole.id })
   );
-  return response.data;
+  return res.data;
 }
 
-/**
- * Finds an employee by email address (case-insensitive).
- *
- * @param {string} email - Email to search for.
- * @param {string} workspaceId - Tenant key.
- * @returns {Promise<Object|null>} Matching employee or null.
- */
+/** Finds an employee by email (case-insensitive). */
 async function findEmployeeByEmail(email, workspaceId) {
-  const response = await runWithTenant(workspaceId, () => axios.get(`/employees`));
+  const res = await runWithTenant(workspaceId, () => axios.get(`/employees`));
   const normalized = String(email).toLowerCase();
-  return (response.data || []).find((e) => e.email?.toLowerCase() === normalized) || null;
+  return (res.data || []).find((e) => e.email?.toLowerCase() === normalized) || null;
+}
+
+/** Role options for static selects, built live from the workspace roles. */
+async function roleOptions(workspaceId) {
+  const res = await runWithTenant(workspaceId, () => axios.get(`/roles`));
+  return (res.data || []).map((role) => ({
+    text: { type: "plain_text", text: role.name },
+    value: role.id,
+  }));
+}
+
+function buildEmployeeCreateModal(options) {
+  return {
+    type: "modal",
+    callback_id: "employee_create_modal",
+    title: { type: "plain_text", text: "Create Employee", emoji: true },
+    submit: { type: "plain_text", text: "Create", emoji: true },
+    close: { type: "plain_text", text: "Cancel", emoji: true },
+    blocks: [
+      {
+        type: "input",
+        block_id: "name_block",
+        element: { type: "plain_text_input", action_id: "name" },
+        label: { type: "plain_text", text: "Full name", emoji: true },
+      },
+      {
+        type: "input",
+        block_id: "email_block",
+        element: { type: "plain_text_input", action_id: "email" },
+        label: { type: "plain_text", text: "Email", emoji: true },
+      },
+      {
+        type: "input",
+        block_id: "phone_block",
+        optional: true,
+        element: { type: "plain_text_input", action_id: "phone" },
+        label: { type: "plain_text", text: "Phone", emoji: true },
+      },
+      {
+        type: "input",
+        block_id: "role_block",
+        optional: true,
+        element: {
+          type: "static_select",
+          action_id: "role",
+          placeholder: { type: "plain_text", text: "No role yet" },
+          options,
+        },
+        label: { type: "plain_text", text: "Role", emoji: true },
+      },
+    ],
+  };
+}
+
+function buildEmployeeEditModal(options) {
+  return {
+    type: "modal",
+    callback_id: "employee_edit_modal",
+    title: { type: "plain_text", text: "Edit Employee", emoji: true },
+    submit: { type: "plain_text", text: "Save", emoji: true },
+    close: { type: "plain_text", text: "Cancel", emoji: true },
+    blocks: [
+      {
+        type: "input",
+        block_id: "select_block",
+        element: {
+          type: "external_select",
+          action_id: "employee",
+          placeholder: { type: "plain_text", text: "Search employee..." },
+          min_query_length: 2,
+        },
+        label: { type: "plain_text", text: "Employee", emoji: true },
+      },
+      {
+        type: "input",
+        block_id: "name_block",
+        optional: true,
+        element: { type: "plain_text_input", action_id: "name" },
+        label: { type: "plain_text", text: "New name", emoji: true },
+      },
+      {
+        type: "input",
+        block_id: "email_block",
+        optional: true,
+        element: { type: "plain_text_input", action_id: "email" },
+        label: { type: "plain_text", text: "New email", emoji: true },
+      },
+      {
+        type: "input",
+        block_id: "phone_block",
+        optional: true,
+        element: { type: "plain_text_input", action_id: "phone" },
+        label: { type: "plain_text", text: "New phone", emoji: true },
+      },
+      {
+        type: "input",
+        block_id: "role_block",
+        optional: true,
+        element: {
+          type: "static_select",
+          action_id: "role",
+          placeholder: { type: "plain_text", text: "Keep current" },
+          options,
+        },
+        label: { type: "plain_text", text: "New role", emoji: true },
+      },
+    ],
+  };
 }
 
 module.exports = {
-  /**
-   * `/omni-employee link <email>`
-   * Attaches a Slack account to an employee record. Management-only.
-   * Resolution order: platform ID → verified Slack email → create new record.
-   */
+  /** /omni-employee link <email> */
   async handleEmployeeLink({ command, ack, say, client }) {
     await ack();
-
     try {
       const workspaceId = command.team_id;
       const email = command.text.trim();
-
       if (!email || !email.includes("@")) {
         return say({
-          text: "Missing email argument",
+          text: "Missing email",
           blocks: buildErrorBlock("Usage: `/omni-employee link user@company.com`"),
           response_type: "ephemeral",
         });
       }
-
-      const requester = await getEmployeeBySlackId(command.user_id, workspaceId);
-      if (!MANAGEMENT_ROLES.includes(requester?.role?.name)) {
+      const requester = await requireManager(command.user_id, workspaceId);
+      if (!requester) {
         return say({
           text: "Permission denied",
           blocks: buildErrorBlock("Only Admins and Managers can link employees."),
           response_type: "ephemeral",
         });
       }
-
-      // Resolve the Slack account behind the email (verified by Slack itself)
       const slackUser = await client.users.lookupByEmail({ email });
       if (!slackUser.ok || !slackUser.user) {
         return say({
-          text: "Slack user not found",
+          text: "User not found",
           blocks: buildErrorBlock(`No Slack user found with email *${email}*.`),
           response_type: "ephemeral",
         });
       }
       const targetSlackId = slackUser.user.id;
-
-      // Resolve or create the employee record
       let employee = await getEmployeeBySlackId(targetSlackId, workspaceId);
-      if (!employee) {
-        employee = await findEmployeeByEmail(email, workspaceId);
-      }
+      if (!employee) employee = await findEmployeeByEmail(email, workspaceId);
       if (!employee) {
         const created = await runWithTenant(workspaceId, () =>
           axios.post(`/employees`, {
@@ -155,20 +212,16 @@ module.exports = {
         );
         employee = linked.data;
       }
-
-      return say({
+      await say({
         text: "Employee linked",
         blocks: buildSuccessBlock(
-          `Employee linked successfully.\n` +
-            `*Name:* ${employee.name}\n` +
-            `*Email:* ${employee.email}\n` +
-            `*Slack user:* <@${targetSlackId}>`
+          `Employee linked successfully.\n*Name:* ${employee.name}\n*Email:* ${employee.email}\n*Slack user:* <@${targetSlackId}>`
         ),
         response_type: "ephemeral",
       });
     } catch (error) {
       console.error("Employee link error:", error.message);
-      return say({
+      await say({
         text: "Link failed",
         blocks: buildErrorBlock(
           `Failed to link employee: ${error.response?.data?.error || error.message}`
@@ -178,35 +231,25 @@ module.exports = {
     }
   },
 
-  /**
-   * `/omni-employee register`
-   * Self-service registration. Creates the employee record from the caller's
-   * verified Slack profile, falls back to the Email Bridge when a record with
-   * the same email already exists, and grants Admin to the workspace owner.
-   */
+  /** /omni-employee register — self-service, owner becomes Admin. */
   async handleEmployeeRegister({ command, ack, say, client }) {
     await ack();
-
     try {
       const workspaceId = command.team_id;
       const slackUserId = command.user_id;
-
       const userInfo = await client.users.info({ user: slackUserId });
       const isWorkspaceOwner = Boolean(userInfo.user?.is_owner || userInfo.user?.is_primary_owner);
       const email = userInfo.user?.profile?.email;
-
       if (!email) {
         return say({
-          text: "No email on Slack profile",
+          text: "No email",
           blocks: buildErrorBlock(
-            "Your Slack profile has no email address. Add one in your Slack profile and try again."
+            "Your Slack profile has no email address. Add one and try again."
           ),
           response_type: "ephemeral",
         });
       }
-
       let employee = await getEmployeeBySlackId(slackUserId, workspaceId);
-
       if (!employee) {
         try {
           const created = await runWithTenant(workspaceId, () =>
@@ -219,8 +262,6 @@ module.exports = {
           );
           employee = created.data;
         } catch (error) {
-          // Email already exists in this workspace: link the existing record
-          // instead of failing (Email Bridge).
           if (error.response?.status === 409) {
             const existing = await findEmployeeByEmail(email, workspaceId);
             if (!existing) throw error;
@@ -233,26 +274,17 @@ module.exports = {
           }
         }
       }
-
-      // Bootstrap: workspace owner becomes Admin on first registration
       const promoted = await promoteToAdminIfOwner(employee, isWorkspaceOwner, workspaceId);
-
-      return say({
+      await say({
         text: "Registration successful",
         blocks: buildSuccessBlock(
-          `Registration successful.\n` +
-            `*Name:* ${promoted.name}\n` +
-            `*Email:* ${promoted.email}\n` +
-            `*Role:* ${promoted.role?.name || "Pending assignment"}` +
-            (promoted.role?.name === "Admin" && employee.role?.name !== "Admin"
-              ? "\n_(Workspace owner bootstrap: Admin granted automatically.)_"
-              : "")
+          `Registration successful.\n*Name:* ${promoted.name}\n*Email:* ${promoted.email}\n*Role:* ${promoted.role?.name || "Pending assignment"}`
         ),
         response_type: "ephemeral",
       });
     } catch (error) {
       console.error("Employee register error:", error.message);
-      return say({
+      await say({
         text: "Registration failed",
         blocks: buildErrorBlock(
           `Registration failed: ${error.response?.data?.error || error.message}`
@@ -262,55 +294,43 @@ module.exports = {
     }
   },
 
-  /**
-   * `/omni-employee info`
-   * Shows the caller's own employee record.
-   */
+  /** /omni-employee info */
   async handleEmployeeInfo({ command, ack, say }) {
     await ack();
-
     try {
-      const workspaceId = command.team_id;
-      const employee = await getEmployeeBySlackId(command.user_id, workspaceId);
-
+      const employee = await getEmployeeBySlackId(command.user_id, command.team_id);
       if (!employee) {
         return say({
           text: "Not registered",
-          blocks: buildErrorBlock(
-            "You are not registered yet. Use `/omni-employee register` to get started."
-          ),
+          blocks: buildErrorBlock("You are not registered yet. Use `/omni-employee register`."),
           response_type: "ephemeral",
         });
       }
-
-      const blocks = [
-        {
-          type: "header",
-          text: { type: "plain_text", text: " Employee Information", emoji: true },
-        },
-        {
-          type: "section",
-          fields: [
-            { type: "mrkdwn", text: `*Name*\n${employee.name}` },
-            { type: "mrkdwn", text: `*Email*\n${employee.email || "N/A"}` },
-            { type: "mrkdwn", text: `*Phone*\n${employee.phone || "N/A"}` },
-            { type: "mrkdwn", text: `*Role*\n${employee.role?.name || "No role"}` },
-            {
-              type: "mrkdwn",
-              text: `*Status*\n${employee.isActive ? "🟢 Active" : "🔴 Inactive"}`,
-            },
-            {
-              type: "mrkdwn",
-              text: `*Platform linked*\n${employee.externalId ? "✅ Linked" : "❌ Not linked"}`,
-            },
-          ],
-        },
-      ];
-
-      return say({ text: "Employee information", blocks, response_type: "ephemeral" });
+      await say({
+        text: "Employee information",
+        blocks: [
+          {
+            type: "header",
+            text: { type: "plain_text", text: `👤 ${employee.name}`, emoji: true },
+          },
+          {
+            type: "section",
+            fields: [
+              { type: "mrkdwn", text: `*🎭 Role*\n${employee.role?.name || "No role"}` },
+              { type: "mrkdwn", text: `*📧 Email*\n${employee.email || "N/A"}` },
+              { type: "mrkdwn", text: `*📱 Phone*\n${employee.phone || "N/A"}` },
+              {
+                type: "mrkdwn",
+                text: `*🔗 Linked*\n${employee.externalId ? "✅ Yes" : "❌ No"}`,
+              },
+            ],
+          },
+        ],
+        response_type: "ephemeral",
+      });
     } catch (error) {
       console.error("Employee info error:", error.message);
-      return say({
+      await say({
         text: "Error",
         blocks: buildErrorBlock(`Failed to load your employee record: ${error.message}`),
         response_type: "ephemeral",
@@ -318,18 +338,12 @@ module.exports = {
     }
   },
 
-  /**
-   * `/omni-employee set-admin <email|@mention>`
-   * Promotes a registered employee to Admin. Restricted to existing Admins,
-   * matching the Discord bot's governance model.
-   */
+  /** /omni-employee set-admin <email|@mention> */
   async handleEmployeeSetAdmin({ command, ack, say }) {
     await ack();
-
     try {
       const workspaceId = command.team_id;
       const caller = await getEmployeeBySlackId(command.user_id, workspaceId);
-
       if (caller?.role?.name !== "Admin") {
         return say({
           text: "Permission denied",
@@ -337,44 +351,252 @@ module.exports = {
           response_type: "ephemeral",
         });
       }
-
       const argument = command.text.trim();
       const mention = /^<@([A-Z0-9]+)>$/i.exec(argument);
-
       let target = null;
-      if (mention) {
-        target = await getEmployeeBySlackId(mention[1], workspaceId);
-      } else if (argument.includes("@")) {
-        target = await findEmployeeByEmail(argument, workspaceId);
-      }
-
+      if (mention) target = await getEmployeeBySlackId(mention[1], workspaceId);
+      else if (argument.includes("@")) target = await findEmployeeByEmail(argument, workspaceId);
       if (!target) {
         return say({
-          text: "Employee not found",
-          blocks: buildErrorBlock(
-            "No registered employee matches that email or mention. They must run `/omni-employee register` first."
-          ),
+          text: "Not found",
+          blocks: buildErrorBlock("No registered employee matches that email or mention."),
           response_type: "ephemeral",
         });
       }
-
       const adminRole = await ensureAdminRole(workspaceId);
       const updated = await runWithTenant(workspaceId, () =>
         axios.patch(`/employees/${target.id}/role`, { roleId: adminRole.id })
       );
-
-      return say({
+      await say({
         text: "Admin assigned",
         blocks: buildSuccessBlock(`*${updated.data?.name || target.name}* is now an Admin.`),
         response_type: "ephemeral",
       });
     } catch (error) {
       console.error("Employee set-admin error:", error.message);
-      return say({
+      await say({
         text: "Error",
         blocks: buildErrorBlock(
           `Failed to promote: ${error.response?.data?.error || error.message}`
         ),
+        response_type: "ephemeral",
+      });
+    }
+  },
+
+  /** /omni-employee create — opens the create modal. */
+  async handleEmployeeCreate({ command, ack, say, client }) {
+    await ack();
+    const workspaceId = command.team_id;
+    try {
+      const manager = await requireManager(command.user_id, workspaceId);
+      if (!manager) {
+        return say({
+          text: "Permission denied",
+          blocks: buildErrorBlock("Only Admins and Managers can create employees."),
+          response_type: "ephemeral",
+        });
+      }
+      const options = await roleOptions(workspaceId);
+      await client.views.open({
+        trigger_id: command.trigger_id,
+        view: buildEmployeeCreateModal(options),
+      });
+    } catch (error) {
+      console.error("Employee create open error:", error.message);
+      await say({
+        text: "Error",
+        blocks: buildErrorBlock(error.message),
+        response_type: "ephemeral",
+      });
+    }
+  },
+
+  /** employee_create_modal submission. */
+  async handleEmployeeCreateSubmit({ body, view, ack, client }) {
+    const workspaceId = body.team?.id || view.team_id;
+    const userId = body.user?.id;
+    try {
+      if (view.callback_id !== "employee_create_modal") return ack();
+      const manager = await requireManager(userId, workspaceId);
+      if (!manager) {
+        return ack({
+          response_action: "errors",
+          errors: { name_block: "Only Admins and Managers can create employees." },
+        });
+      }
+      const values = view.state.values;
+      const name = values.name_block?.name?.value?.trim();
+      const email = values.email_block?.email?.value?.trim();
+      const phone = values.phone_block?.phone?.value?.trim() || null;
+      const roleId = values.role_block?.role?.selected_option?.value || null;
+      const errors = {};
+      if (!name) errors.name_block = "Name is required";
+      if (!email || !email.includes("@")) errors.email_block = "A valid email is required";
+      if (Object.keys(errors).length) return ack({ response_action: "errors", errors });
+
+      const created = await runWithTenant(workspaceId, () =>
+        axios.post(`/employees`, { name, email, phone, roleId })
+      );
+      await ack({ response_action: "clear" });
+      await sendDm(client, userId, {
+        text: `Employee created: ${created.data.name}`,
+        blocks: buildSuccessBlock(
+          `*${created.data.name}* created with role *${created.data.role?.name || "none"}*.\nLink their Slack account later with \`/omni-employee link ${email}\`.`
+        ),
+      });
+    } catch (error) {
+      console.error("Employee create error:", error.message);
+      const message = error.response?.data?.error || error.message;
+      await ack({
+        response_action: "errors",
+        errors: {
+          email_block:
+            error.response?.status === 409 ? "Email already exists in this workspace." : message,
+        },
+      });
+    }
+  },
+
+  /** /omni-employee edit — opens the edit modal. */
+  async handleEmployeeEdit({ command, ack, say, client }) {
+    await ack();
+    const workspaceId = command.team_id;
+    try {
+      const manager = await requireManager(command.user_id, workspaceId);
+      if (!manager) {
+        return say({
+          text: "Permission denied",
+          blocks: buildErrorBlock("Only Admins and Managers can edit employees."),
+          response_type: "ephemeral",
+        });
+      }
+      const options = await roleOptions(workspaceId);
+      await client.views.open({
+        trigger_id: command.trigger_id,
+        view: buildEmployeeEditModal(options),
+      });
+    } catch (error) {
+      console.error("Employee edit open error:", error.message);
+      await say({
+        text: "Error",
+        blocks: buildErrorBlock(error.message),
+        response_type: "ephemeral",
+      });
+    }
+  },
+
+  /** employee_edit_modal submission; empty fields keep current values. */
+  async handleEmployeeEditSubmit({ body, view, ack, client }) {
+    const workspaceId = body.team?.id || view.team_id;
+    const userId = body.user?.id;
+    try {
+      if (view.callback_id !== "employee_edit_modal") return ack();
+      const manager = await requireManager(userId, workspaceId);
+      if (!manager) {
+        return ack({
+          response_action: "errors",
+          errors: { select_block: "Only Admins and Managers can edit employees." },
+        });
+      }
+      const values = view.state.values;
+      const employeeId = values.select_block?.employee?.selected_option?.value;
+      if (!employeeId) {
+        return ack({ response_action: "errors", errors: { select_block: "Select an employee." } });
+      }
+      const updateData = {};
+      if (values.name_block?.name?.value?.trim())
+        updateData.name = values.name_block.name.value.trim();
+      if (values.email_block?.email?.value?.trim())
+        updateData.email = values.email_block.email.value.trim();
+      if (values.phone_block?.phone?.value !== undefined)
+        updateData.phone = values.phone_block.phone.value.trim() || null;
+      const roleId = values.role_block?.role?.selected_option?.value;
+
+      if (Object.keys(updateData).length === 0 && !roleId) {
+        return ack({
+          response_action: "errors",
+          errors: { select_block: "Nothing to update. Fill at least one field." },
+        });
+      }
+      let updated = null;
+      if (Object.keys(updateData).length) {
+        updated = (
+          await runWithTenant(workspaceId, () =>
+            axios.patch(`/employees/${employeeId}`, updateData)
+          )
+        ).data;
+      }
+      if (roleId) {
+        updated = (
+          await runWithTenant(workspaceId, () =>
+            axios.patch(`/employees/${employeeId}/role`, { roleId })
+          )
+        ).data;
+      }
+      await ack({ response_action: "clear" });
+      await sendDm(client, userId, {
+        text: `Employee updated: ${updated?.name || employeeId}`,
+        blocks: buildSuccessBlock(`*${updated?.name || "Employee"}* updated.`),
+      });
+    } catch (error) {
+      console.error("Employee edit error:", error.message);
+      await ack({
+        response_action: "errors",
+        errors: { select_block: error.response?.data?.error || error.message },
+      });
+    }
+  },
+
+  /** /omni-employee list — manager-only roster. */
+  async handleEmployeeList({ command, ack, say }) {
+    await ack();
+    const workspaceId = command.team_id;
+    try {
+      const manager = await requireManager(command.user_id, workspaceId);
+      if (!manager) {
+        return say({
+          text: "Permission denied",
+          blocks: buildErrorBlock("Only Admins and Managers can view the full roster."),
+          response_type: "ephemeral",
+        });
+      }
+      const res = await runWithTenant(workspaceId, () => axios.get(`/employees`));
+      const employees = res.data || [];
+      if (!employees.length) {
+        return say({
+          text: "No employees",
+          blocks: buildSuccessBlock("No employee records yet."),
+          response_type: "ephemeral",
+        });
+      }
+      const blocks = [
+        {
+          type: "header",
+          text: { type: "plain_text", text: `👥 Team Roster (${employees.length})`, emoji: true },
+        },
+        ...employees.slice(0, 15).map((e) => ({
+          type: "section",
+          text: {
+            type: "mrkdwn",
+            text:
+              `*${e.name}* — ${e.role?.name || "No role"}\n` +
+              `${e.email || "No email"} · ${e.externalId ? "🔗 Linked" : "❌ Not linked"}`,
+          },
+        })),
+      ];
+      if (employees.length > 15) {
+        blocks.push({
+          type: "context",
+          elements: [{ type: "mrkdwn", text: `Showing 15 of ${employees.length} employees.` }],
+        });
+      }
+      await say({ text: "Team roster", blocks, response_type: "ephemeral" });
+    } catch (error) {
+      console.error("Employee list error:", error.message);
+      await say({
+        text: "Error",
+        blocks: buildErrorBlock(error.message),
         response_type: "ephemeral",
       });
     }

@@ -9,7 +9,7 @@ const { runWithTenant } = require("../utils/tenantContext");
 const { buildSuccessBlock, buildErrorBlock } = require("../utils/slackBlocks");
 const { sendDm } = require("../utils/slackDm");
 const { isValidTimeZone } = require("../utils/slackDates");
-
+const { testAiConnection, defaultModel, defaultBase } = require("../utils/aiGateway");
 const TIMEZONE_OPTIONS = [
   { text: { type: "plain_text", text: "🌐 UTC (GMT)", emoji: true }, value: "UTC" },
   { text: { type: "plain_text", text: "🇬🇧 London", emoji: true }, value: "Europe/London" },
@@ -696,6 +696,15 @@ module.exports = {
           });
         }
         const cfg = { provider, model, key, baseUrl: base };
+        const test = await testAiConnection({
+          provider,
+          model: model || defaultModel(provider),
+          apiKey: key,
+          baseUrl: base || defaultBase(provider),
+        });
+        if (!test.ok) {
+          return ack({ response_action: "errors", errors: { ai_key_block: test.message } });
+        }
         await runWithTenant(workspaceId, () =>
           axios.patch(`/workspaces/slack/${workspaceId}`, { aiApiKey: JSON.stringify(cfg) })
         );

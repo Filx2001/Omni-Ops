@@ -103,6 +103,12 @@ app.command("/omni-employee", async ({ command, ack, say, client }) => {
   } else if (subcommand === "set-admin") {
     command.text = args.slice(1).join(" ").trim();
     await employeeCmd.handleEmployeeSetAdmin({ command, ack, say, client });
+  } else if (subcommand === "create") {
+    await employeeCmd.handleEmployeeCreate({ command, ack, say, client });
+  } else if (subcommand === "edit") {
+    await employeeCmd.handleEmployeeEdit({ command, ack, say, client });
+  } else if (subcommand === "list") {
+    await employeeCmd.handleEmployeeList({ command, ack, say });
   } else {
     await say({
       text: "Unknown subcommand",
@@ -111,7 +117,15 @@ app.command("/omni-employee", async ({ command, ack, say, client }) => {
           type: "section",
           text: {
             type: "mrkdwn",
-            text: "• `/omni-employee link <email>`\n• `/omni-employee register`\n• `/omni-employee info`\n• `/omni-employee set-admin <email|@user>`",
+            text:
+              "*Available subcommands:*\n" +
+              "• `/omni-employee link <email>` — Link a Slack account to an employee record\n" +
+              "• `/omni-employee register` — Register yourself (workspace owner becomes Admin)\n" +
+              "• `/omni-employee info` — View your employee record\n" +
+              "• `/omni-employee create` — Create an employee record\n" +
+              "• `/omni-employee edit` — Edit name, email, phone or role\n" +
+              "• `/omni-employee list` — Full team roster\n" +
+              "• `/omni-employee set-admin <email|@user>` — Promote to Admin (Admin only)",
           },
         },
       ],
@@ -125,7 +139,11 @@ app.event("team_join", teamJoinEvent.handleTeamJoin);
 app.command("/omni-task", taskCmd.handleTaskCommand);
 app.view("task_create_modal", taskCmd.handleTaskViewSubmit);
 app.view("task_delete_modal", taskCmd.handleTaskDeleteViewSubmit);
-
+app.view("task_status_modal", taskCmd.handleTaskStatusViewSubmit);
+app.view("task_edit_modal", taskCmd.handleTaskEditViewSubmit);
+app.view("event_edit_modal", calendarCmd.handleEventEditViewSubmit);
+app.view("employee_create_modal", employeeCmd.handleEmployeeCreateSubmit);
+app.view("employee_edit_modal", employeeCmd.handleEmployeeEditSubmit);
 app.command("/omni-appointment", appointmentCmd.handleAppointmentCommand);
 app.view("appointment_create_modal", appointmentCmd.handleAppointmentCreateSubmit);
 app.view("appointment_edit_modal", appointmentCmd.handleAppointmentEditSubmit);
