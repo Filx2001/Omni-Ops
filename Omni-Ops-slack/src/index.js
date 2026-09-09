@@ -23,6 +23,7 @@ const crmOptions = require("./options/crmOptions");
 const { startScheduler } = require("./cron/scheduler");
 const { startNotifyServer } = require("./notifyServer");
 const assistant = require("./events/assistant");
+const { rememberOrigin } = require("./utils/slackDm");
 const SCOPES = [
   "app_mentions:read",
   "channels:join",
@@ -62,6 +63,14 @@ const app = new App(appOptions);
 app.use(async ({ body, next }) => {
   const teamId = body.team?.id || body.team_id || body.authorizations?.[0]?.team_id;
   if (teamId) await getWorkspace(teamId).catch(() => {});
+  await next();
+});
+// Remember where each interaction started so modal confirmations
+// return to that channel instead of the DM fallback.
+app.use(async ({ body, next }) => {
+  const userId = body.user?.id || body.user_id;
+  const channelId = body.channel?.id || body.channel_id;
+  if (userId && channelId) rememberOrigin(userId, channelId);
   await next();
 });
 app.command("/omni-ping", async ({ command, ack, say }) => {
