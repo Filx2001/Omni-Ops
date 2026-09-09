@@ -1,358 +1,339 @@
 # Omni-Ops
 
-**Multi-tenant operations platform for Discord and Slack**
+**Multi-tenant business operations platform that lives inside Discord and Slack.**
 
-Omni-Ops is a complete business operations system that runs as a bot in Discord or Slack. Each workspace (Discord server or Slack team) gets isolated data, Google Calendar/Sheets integration, WhatsApp campaigns, and an AI assistant — all from a single deployment.
+Omni-Ops turns a chat workspace into an operations console. Each Discord server or Slack team gets its own isolated data, its own Google Calendar and Sheets, its own WhatsApp campaigns, and its own AI assistant — all served from a single deployment.
 
-## 🎯 What it does
+![Node](https://img.shields.io/badge/node-%3E%3D20-339933?logo=node.js&logoColor=white)
+![PostgreSQL](https://img.shields.io/badge/postgres-%3E%3D15-4169E1?logo=postgresql&logoColor=white)
+![License](https://img.shields.io/badge/license-MIT-blue)
 
-- **Tasks & Scheduling**: Create, assign, track tasks and appointments with Google Calendar sync.
-- **CRM & Campaigns**: Manage leads, send WhatsApp bulk campaigns with audience filtering.
-- **Invoicing**: Create invoices, send via email, track payments.
-- **Calendar & Events**: Organization events with employee assignment and Google Calendar integration.
-- **AI Assistant**: Natural language interface for all operations (Claude, GPT, Gemini, DeepSeek).
-- **Google Integration**: Per-workspace OAuth for Calendar + 4 Sheets (Leads, Schedule, Accounting, Personal).
-- **WhatsApp Bridge**: Incoming messages create leads, push to Slack/Discord channels.
+---
 
-## 🏗️ Architecture
+## Contents
 
-Omni-Ops is built as three independent services sharing one PostgreSQL database. You can run Discord only, Slack only, or both. Each platform is feature-complete and independent.
+- [Why Omni-Ops](#why-omni-ops)
+- [Features](#features)
+- [Architecture](#architecture)
+- [Repository layout](#repository-layout)
+- [Quick start](#quick-start)
+- [Environment variables](#environment-variables)
+- [Integrations](#integrations)
+- [Command reference](#command-reference)
+- [Security](#security)
+- [Troubleshooting](#troubleshooting)
+- [Contributing](#contributing)
+- [License](#license)
 
-- **API (`Omni-Ops-api`)**: Core logic, Prisma ORM, webhooks, integrations (Node.js/Express).
-- **Discord Bot (`Omni-Ops-bot`)**: Discord interface (discord.js).
-- **Slack Bot (`Omni-Ops-slack`)**: Slack interface (@slack/bolt via Socket Mode).
+---
 
-## ✨ Features
+## Why Omni-Ops
 
-### Core Operations
+Small teams already live in Discord or Slack. Omni-Ops means they don't have to leave: tasks, appointments, leads, invoices and reporting all happen in the channel, in the same thread as the conversation that created them.
 
-| Command             | Description                                                    |
-| ------------------- | -------------------------------------------------------------- |
-| `/omni-config`      | Workspace settings (timezone, currency, AI, Google, channels)  |
-| `/omni-employee`    | Link users, create/edit/list employees, assign roles           |
-| `/omni-task`        | Create, list, edit, delete tasks with assignments              |
-| `/omni-appointment` | Schedule appointments (single or series) with Google sync      |
-| `/omni-calendar`    | Organization events with employee assignment                   |
-| `/omni-invoice`     | Create invoices, send via email, track payments                |
-| `/omni-dashboard`   | Management statistics overview                                 |
-| `/omni-my`          | Personal workspace (profile, tasks, appointments, performance) |
+It's built for the operator who wants one deployment to serve many clients or many teams. Every record is scoped to a workspace, and every workspace brings its own Google account, its own AI provider key, and its own settings.
 
-### CRM & Marketing
+**Good fit if you:**
 
-| Command          | Description                                     |
-| ---------------- | ----------------------------------------------- |
-| `/omni-leads`    | Add, assign, status, notes, edit, delete leads  |
-| `/omni-campaign` | WhatsApp bulk campaigns with audience filtering |
+- Run an agency, service business or internal ops team out of a chat workspace
+- Need Google Calendar and Sheets as the source of truth your non-technical staff can see
+- Want lead capture from WhatsApp landing in a channel within seconds
+- Would rather self-host than pay per seat
 
-### AI Assistant
+**Not a fit if you** need a full accounting suite, a public-facing customer portal, or a hosted SaaS you don't have to operate yourself.
 
-- **@mention** the bot in any channel or **DM** it.
-- Retrieval tools execute immediately (list tasks, get stats).
-- Mutating tools require ✅/❌ confirmation (create task, update status).
-- Supports Anthropic Claude, OpenAI GPT, Google Gemini, DeepSeek, Qwen.
+---
 
-### Integrations
+## Features
 
-- **Google Workspace**: Per-workspace OAuth → auto-provisions Calendar + 4 Sheets.
-- **WhatsApp Cloud API**: Incoming messages → leads + channel notifications.
-- **Resend**: Email invoices to customers.
-- **Chatwoot**: Inbox bridge for agent replies.
+### Operations
 
-## 🚀 Quick Start
+| Area             | What you get                                                                       |
+| ---------------- | ---------------------------------------------------------------------------------- |
+| **Tasks**        | Create, assign, edit and track tasks with status transitions and per-user views     |
+| **Appointments** | Single or recurring appointments, conflict checking, two-way Google Calendar sync   |
+| **Calendar**     | Organization-wide events with employee assignment                                   |
+| **Invoicing**    | Build invoices, email them via Resend, track payment status, signed PDF links       |
+| **Employees**    | Link chat accounts to employee records, assign roles, enforce permissions           |
+| **Dashboard**    | Management statistics across tasks, appointments and revenue                        |
+| **Personal**     | `/omni-my` — your profile, your tasks, your schedule, your performance, reminders    |
+
+### CRM and marketing
+
+| Area          | What you get                                                                        |
+| ------------- | ----------------------------------------------------------------------------------- |
+| **Leads**     | Add singly or in bulk, assign to staff, set status, attach notes, sync to Sheets     |
+| **Campaigns** | WhatsApp bulk sends with audience filtering, opt-out handling, live send status      |
+
+### AI assistant
+
+@mention the bot in any channel, or DM it, and ask in plain language.
+
+- **Retrieval tools run immediately** — listing tasks or pulling stats needs no approval.
+- **Mutating tools require confirmation** — creating a task or changing a status posts a ✅ / ❌ prompt first.
+- **Bring your own key**, per workspace: Anthropic Claude, OpenAI GPT, Google Gemini, DeepSeek or Qwen.
+
+```
+@Omni-Ops what's overdue for the design team this week?
+@Omni-Ops create a task for Sara to call the Al Sadd lead tomorrow at 10
+```
+
+---
+
+## Architecture
+
+Three independent services share one PostgreSQL database. The API owns all logic and data; the bots are thin platform adapters. Run Discord only, Slack only, or both.
+
+```mermaid
+flowchart LR
+    D[Discord Bot<br/>discord.js v14] -->|REST + INTERNAL_API_KEY| A
+    S[Slack Bot<br/>@slack/bolt Socket Mode] -->|REST + INTERNAL_API_KEY| A
+    A[Omni-Ops API<br/>Express + Prisma]
+    A --> DB[(PostgreSQL)]
+    A --> G[Google Calendar<br/>+ Sheets]
+    A --> W[WhatsApp Cloud API]
+    A --> R[Resend]
+    A --> C[Chatwoot]
+    W -.->|inbound message| A
+    A -.->|notify| D
+    A -.->|notify| S
+```
+
+**Why it's split this way:** platform SDKs are noisy and change often. Keeping every business rule in the API means adding a third platform later is an adapter, not a rewrite — and it means a Discord outage can't take your data layer with it.
+
+The dotted arrows are the notify path: an inbound WhatsApp message creates a lead in the API, which then pushes a card into the configured leads channel on each running bot.
+
+---
+
+## Repository layout
+
+```
+Omni-Ops/
+├── Omni-Ops-api/          # Core service — all logic, data and integrations
+│   ├── prisma/            # Schema and migrations
+│   └── src/
+│       ├── modules/       # tasks, crm, campaigns, invoices, calendar,
+│       │                  # employees, roles, dashboard, reminders,
+│       │                  # workspaces, sheets, google, links
+│       ├── integrations/  # Google, WhatsApp, Chatwoot, bot notifier
+│       ├── middleware/    # auth, WhatsApp webhook verification
+│       ├── jobs/          # scheduled maintenance
+│       └── utils/         # crypto, phone, timezone, tenant resolution
+├── Omni-Ops-bot/          # Discord adapter
+│   └── src/
+│       ├── commands/      # one file per slash command
+│       ├── events/        # interactions, messages, reactions, guild lifecycle
+│       ├── cron/          # scheduled reports and reminders
+│       └── utils/         # AI gateway + tools, date parsing, caching
+└── Omni-Ops-slack/        # Slack adapter
+    ├── slack-app-manifest.json
+    └── src/
+```
+
+---
+
+## Quick start
 
 ### Prerequisites
 
-- Node.js 20+
-- PostgreSQL 15+
-- Railway account (recommended) or any Docker/hosting platform
-- Discord or Slack workspace
+- Node.js 20 or later
+- PostgreSQL 15 or later
+- Railway (recommended), or any Docker host
+- A Discord server or Slack workspace where you have admin rights
 
-### 1. Deploy the API (The Core)
+### 1. Deploy the API
 
-The API holds the database and logic. It must be reachable by both bots.
+The API holds the database and all logic. Both bots must be able to reach it.
 
 ```bash
-git clone https://github.com/yourusername/omni-ops.git
-cd omni-ops/Omni-Ops-api
+git clone https://github.com/Filx2001/Omni-Ops.git
+cd Omni-Ops/Omni-Ops-api
 npm install
+cp .env.example .env
 ```
 
-Set environment variables (see full list below):
+Generate the two secrets:
 
-```env
-DATABASE_URL="postgresql://..."
-INTERNAL_API_KEY="generate-64-hex-chars"
-SECRET_ENCRYPTION_KEY="generate-another-64-hex-chars"
-API_PUBLIC_URL="https://your-api.up.railway.app"
+```bash
+openssl rand -hex 32   # INTERNAL_API_KEY
+openssl rand -hex 32   # SECRET_ENCRYPTION_KEY
 ```
 
-Run migrations and start:
+Fill in `.env`, then run migrations and start:
 
 ```bash
 npx prisma migrate deploy
 npm start
 ```
 
-### 2. Deploy Discord Bot (Optional)
+> **Keep `SECRET_ENCRYPTION_KEY` safe and unchanged.** It encrypts every stored AI key, Slack token and Google refresh token. Rotating it without re-encrypting will lock you out of all workspace credentials.
+
+### 2. Deploy the Discord bot (optional)
 
 ```bash
 cd ../Omni-Ops-bot
 npm install
-# Set DISCORD_BOT_TOKEN, DISCORD_CLIENT_ID, DISCORD_GUILD_ID, API_URL, INTERNAL_API_KEY
 npm start
 ```
 
-The bot auto-registers slash commands to your guild on startup.
+Set `DISCORD_BOT_TOKEN`, `DISCORD_CLIENT_ID`, `DISCORD_GUILD_ID`, `API_URL` and `INTERNAL_API_KEY`. Slash commands register to your guild automatically on startup.
 
-### 3. Deploy Slack Bot (Optional)
+### 3. Deploy the Slack bot (optional)
 
 ```bash
 cd ../Omni-Ops-slack
 npm install
-# Set SLACK_BOT_TOKEN, SLACK_APP_TOKEN, SLACK_SIGNING_SECRET, API_URL, INTERNAL_API_KEY
 npm start
 ```
 
-Create your Slack app using the `slack-app-manifest.json` file provided in the repo.
+Create the Slack app from [`Omni-Ops-slack/slack-app-manifest.json`](Omni-Ops-slack/slack-app-manifest.json) — it sets up all slash commands, scopes and event subscriptions in one step. Full walkthrough: **[SLACK_SETUP.md](SLACK_SETUP.md)**.
 
-### 4. Connect Google (Optional)
+### 4. Connect Google (optional)
 
-1. **Google Cloud Console**: Create OAuth 2.0 Client (Web application) with redirect URI `https://<your-api-url>/google/callback`.
-2. **API env vars**: Set `GOOGLE_OAUTH_CLIENT_ID` and `GOOGLE_OAUTH_CLIENT_SECRET`.
-3. **Connect workspace**: Run `/omni-config` (Slack) or `/config setup` (Discord) and click **Connect Google**.
+1. In Google Cloud Console, create an OAuth 2.0 Client (Web application) with redirect URI `https://<your-api-url>/google/callback`.
+2. Set `GOOGLE_OAUTH_CLIENT_ID` and `GOOGLE_OAUTH_CLIENT_SECRET` on the API service.
+3. Run `/omni-config` (Slack) or `/config setup` (Discord) and click **Connect Google**.
 
-### 5. First Run
+First connect auto-provisions a Calendar plus four Sheets: Leads, Schedule, Accounting and Personal.
 
-1. **Register as Admin**: `/omni-employee register` (Slack) or `/setup` (Discord). Workspace owners automatically become Admins.
-2. **Test connectivity**: `/omni-ping`.
-3. **Create your first task**: `/omni-task create`.
+### 5. First run
 
-## 🔐 Security
-
-- **Multi-tenant isolation**: All data is workspace-scoped via Prisma queries.
-- **Encrypted secrets**: `aiApiKey`, `slackBotToken`, `googleRefreshToken` encrypted at rest with AES-256-CBC.
-- **Signed PDF links**: Invoice PDFs use HMAC-SHA256 signatures with 1-hour expiry.
-- **OAuth state verification**: Google OAuth uses HMAC-signed state to prevent CSRF.
-- **Internal API key**: Bot-to-API communication authenticated via shared secret.
-
-## 🛠️ Tech Stack
-
-**API:** Node.js, Express, Prisma ORM, PostgreSQL, Google APIs, WhatsApp Cloud API, Resend  
-**Discord Bot:** discord.js v14, Express (internal notify server)  
-**Slack Bot:** @slack/bolt (Socket Mode), Express (internal notify server)
-
-## 📄 License
-
-MIT
-
-````
-
----
-
-### 2. `SLACK_SETUP.md`
-
-```markdown
-# Slack Setup Guide
-
-Complete guide for deploying Omni-Ops on Slack. This guide assumes your API service is already deployed and running.
-
-## Table of Contents
-1. [Create Slack App](#1-create-slack-app)
-2. [Environment Variables](#2-environment-variables)
-3. [Deploy Slack Bot](#3-deploy-slack-bot)
-4. [First Run](#4-first-run)
-5. [Troubleshooting](#5-troubleshooting)
-
----
-
-## 1. Create Slack App
-
-### Option A: From Manifest (Recommended)
-This is the fastest way. It automatically creates the app with all 11 slash commands, scopes, and settings.
-
-1. Go to [api.slack.com/apps](https://api.slack.com/apps).
-2. Click **Create New App** → **From an app manifest**.
-3. Select your workspace.
-4. Paste the JSON from [slack-app-manifest.json](slack-app-manifest.json) (remove the ../) in this repository.
-5. Click **Next** → **Create**.
-6. Go to **Basic Information** → **App-Level Tokens** → Generate a token with the `connections:write` scope. Copy this token (starts with `xapp-`).
-7. Go to **Install App** → **Install to Workspace** → **Allow**. Copy the **Bot User OAuth Token** (starts with `xoxb-`).
-8. Copy the **Signing Secret** from the Basic Information page.
-
-### Option B: Manual Creation
-If you prefer manual setup:
-1. Create New App → From scratch.
-2. **App Home**: Enable Messages Tab, disable Read-only.
-3. **Bot User**: Display name `Omni-Ops`, Always online: ✅.
-4. **Slash Commands**: Add all 11 commands manually (see Command Reference below).
-5. **OAuth & Permissions**: Add bot scopes: `app_mentions:read`, `channels:join`, `channels:manage`, `channels:read`, `chat:write`, `chat:write.public`, `commands`, `im:history`, `im:write`, `reactions:write`, `team:read`, `users:read`, `users:read.email`.
-6. **Event Subscriptions**: Enable, subscribe to bot events: `app_mention`, `message.im`, `team_join`.
-7. **Basic Information**: Generate App-Level Token with `connections:write`.
-8. **Install to Workspace**.
-
----
-
-## 2. Environment Variables
-
-Set these on your **Slack Bot service** (Railway, Docker, etc.):
-
-### Required Variables
-```env
-# From Slack App → Basic Information → App-Level Tokens
-SLACK_APP_TOKEN="xapp-1-..."
-
-# From Slack App → Install App → Bot User OAuth Token
-SLACK_BOT_TOKEN="xoxb-..."
-
-# From Slack App → Basic Information → Signing Secret
-SLACK_SIGNING_SECRET="..."
-
-# API Connection
-API_URL="http://your-api.railway.internal:3000"
-API_PUBLIC_URL="https://your-api.up.railway.app"
-INTERNAL_API_KEY="must-match-api-service"
-
-# PDF Links (must match API)
-PDF_LINK_SECRET="must-match-api-service"
-````
-
-### Optional Variables
-
-```env
-# Timezone fallback (if workspace tz not set)
-DEFAULT_TIMEZONE="Asia/Qatar"
-
-# Internal notify server port (for WhatsApp lead pushes)
-NOTIFY_PORT=3001
+```
+/omni-employee register    # Slack — workspace owner becomes Admin
+/setup                     # Discord — same thing
+/omni-ping                 # confirm the bot reaches the API
+/omni-task create          # your first task
 ```
 
 ---
 
-## 3. Deploy Slack Bot
+## Environment variables
 
-### Railway (Recommended)
+### API (`Omni-Ops-api`)
 
-1. Create new service → Deploy from GitHub repo.
-2. Root Directory: `Omni-Ops-slack`.
-3. Environment Variables: Paste all variables from step 2.
-4. Deploy.
+| Variable                     | Required | Description                                                 |
+| ---------------------------- | -------- | ----------------------------------------------------------- |
+| `DATABASE_URL`               | Yes      | PostgreSQL connection string                                |
+| `INTERNAL_API_KEY`           | Yes      | Shared secret for bot-to-API calls; must match on both bots  |
+| `SECRET_ENCRYPTION_KEY`      | Yes      | 64 hex chars. Encrypts stored workspace credentials at rest  |
+| `API_PUBLIC_URL`             | Yes      | Public HTTPS URL — used for OAuth callbacks and PDF links    |
+| `PDF_LINK_SECRET`            | Yes      | Signs invoice PDF links; must match the bots                 |
+| `GOOGLE_OAUTH_CLIENT_ID`     | No       | Required only for Google Calendar / Sheets                   |
+| `GOOGLE_OAUTH_CLIENT_SECRET` | No       | Required only for Google Calendar / Sheets                   |
+| `DISCORD_BOT_NOTIFY_URL`     | No       | Internal URL of the Discord bot's notify server              |
+| `SLACK_BOT_NOTIFY_URL`       | No       | Internal URL of the Slack bot's notify server                |
 
-### Docker
+WhatsApp Cloud API, Resend and Chatwoot credentials are also read by the API — see `Omni-Ops-api/.env.example` for the exact names.
+
+### Discord bot (`Omni-Ops-bot`)
+
+| Variable             | Required | Description                                       |
+| -------------------- | -------- | ------------------------------------------------- |
+| `DISCORD_BOT_TOKEN`  | Yes      | Bot token from the Discord developer portal       |
+| `DISCORD_CLIENT_ID`  | Yes      | Application ID                                    |
+| `DISCORD_GUILD_ID`   | Yes      | Guild to register slash commands against          |
+| `API_URL`            | Yes      | Internal URL of the API service                   |
+| `INTERNAL_API_KEY`   | Yes      | Must match the API                                |
+| `PDF_LINK_SECRET`    | Yes      | Must match the API                                |
+| `NOTIFY_PORT`        | No       | Port for the internal notify server               |
+| `DEFAULT_TIMEZONE`   | No       | Fallback when a workspace has no timezone set     |
+
+### Slack bot (`Omni-Ops-slack`)
+
+| Variable                | Required | Description                                    |
+| ----------------------- | -------- | ---------------------------------------------- |
+| `SLACK_APP_TOKEN`       | Yes      | App-level token (`xapp-`), scope `connections:write` |
+| `SLACK_BOT_TOKEN`       | Yes      | Bot user OAuth token (`xoxb-`)                 |
+| `SLACK_SIGNING_SECRET`  | Yes      | From Basic Information                         |
+| `API_URL`               | Yes      | Internal URL of the API service                |
+| `API_PUBLIC_URL`        | Yes      | Public API URL, for links posted into Slack    |
+| `INTERNAL_API_KEY`      | Yes      | Must match the API                             |
+| `PDF_LINK_SECRET`       | Yes      | Must match the API                             |
+| `NOTIFY_PORT`           | No       | Port for the internal notify server            |
+| `DEFAULT_TIMEZONE`      | No       | Fallback when a workspace has no timezone set  |
+
+---
+
+## Integrations
+
+| Service               | What it does                                                                      | Setup                                              |
+| --------------------- | --------------------------------------------------------------------------------- | -------------------------------------------------- |
+| **Google Workspace**  | Per-workspace OAuth; auto-provisions a Calendar and four Sheets                    | `GOOGLE_OAUTH_*` on the API, then `/omni-config`    |
+| **WhatsApp Cloud API**| Inbound messages become leads and post to your leads channel; powers bulk campaigns| Webhook pointed at the API, credentials in `.env`   |
+| **Resend**            | Emails invoices to customers                                                       | API key in `.env`                                   |
+| **Chatwoot**          | Inbox bridge so agents can reply from Chatwoot                                     | Credentials in `.env`                               |
+| **AI providers**      | Claude, GPT, Gemini, DeepSeek, Qwen                                                | `/omni-config` → 🤖 AI → choose provider, paste key |
+
+---
+
+## Command reference
+
+Slack uses flat commands (`/omni-task`); Discord uses the same names with subcommands.
+
+| Command                                                             | Description                             |
+| ------------------------------------------------------------------- | --------------------------------------- |
+| `/omni-ping`                                                        | Test connectivity to the API            |
+| `/omni-config`                                                      | Workspace control panel                 |
+| `/omni-employee register`                                           | Register yourself (owner becomes Admin) |
+| `/omni-employee link <email>`                                       | Link your chat account to an employee   |
+| `/omni-employee create · edit · list`                               | Manage employee records (Manager+)      |
+| `/omni-employee set-admin <user>`                                   | Promote to Admin (Admin only)           |
+| `/omni-task create · list · edit · status · delete`                 | Task management                         |
+| `/omni-appointment add · list · edit · delete`                      | Appointment scheduling                  |
+| `/omni-calendar create · list · edit · delete · sync`               | Organization events                     |
+| `/omni-invoice create · list · status · delete`                     | Invoicing and payments                  |
+| `/omni-dashboard`                                                   | Management statistics                   |
+| `/omni-my profile · tasks · appointments · performance · reminders` | Personal workspace                      |
+| `/omni-leads list · add · multi-add · info · assign · status · note · edit · delete` | CRM management   |
+| `/omni-campaign audience · new · list · send · stop · status · info · recipients`   | WhatsApp campaigns |
+| `@Omni-Ops <question>`                                              | AI assistant in a channel               |
+| DM the bot                                                          | AI assistant in private                 |
+
+---
+
+## Security
+
+- **Tenant isolation** — every Prisma query is scoped to a workspace; there is no cross-workspace read path.
+- **Secrets encrypted at rest** — `aiApiKey`, `slackBotToken` and `googleRefreshToken` are encrypted with a key that never leaves your environment.
+- **Signed PDF links** — invoice PDFs are served behind HMAC-SHA256 signatures that expire after one hour.
+- **OAuth CSRF protection** — the Google OAuth `state` parameter is HMAC-signed and verified on callback.
+- **Bot-to-API auth** — every internal call carries `INTERNAL_API_KEY`; keep the API on a private network where your host supports it.
+- **AI guardrails** — the assistant cannot mutate data without an explicit reaction confirmation from the user.
+
+Never commit a `.env` file. Each service ships a `.gitignore` that excludes it; if you suspect a key was ever committed, rotate it and rewrite history rather than just deleting the file.
+
+Found a vulnerability? Open a private security advisory on this repository rather than a public issue.
+
+---
+
+## Troubleshooting
+
+| Symptom                              | Likely cause and fix                                                                                     |
+| ------------------------------------ | -------------------------------------------------------------------------------------------------------- |
+| Slash commands missing               | Slack: re-install from the manifest, then reload the client. Discord: check `DISCORD_GUILD_ID` and restart |
+| `You are not registered`             | Run `/omni-employee register` (Slack) or `/setup` (Discord)                                               |
+| `API error: 404` / can't reach API   | `API_URL` is wrong or the API is down; confirm `INTERNAL_API_KEY` matches on both sides                    |
+| WhatsApp leads not posting           | Set `SLACK_BOT_NOTIFY_URL` / `DISCORD_BOT_NOTIFY_URL` on the API, and pick a leads channel in `/omni-config` |
+| AI replies "not configured"          | `/omni-config` → 🤖 AI → select a provider and paste a key                                                |
+| Google sync silently doing nothing   | Re-run **Connect Google**; the refresh token may have been revoked                                        |
+
+Slack-specific problems are covered in more depth in [SLACK_SETUP.md](SLACK_SETUP.md).
+
+---
+
+## Contributing
+
+Issues and pull requests are welcome.
 
 ```bash
-cd Omni-Ops-slack
-docker build -t omni-ops-slack .
-docker run -d --env-file .env -p 3001:3001 omni-ops-slack
+npm install          # in the service you're changing
+npx prisma validate  # API only, before touching the schema
 ```
 
-### Direct Node
-
-```bash
-cd Omni-Ops-slack
-npm install
-npm start
-```
-
-**Verify deployment:**
-
-- Check logs for: `Omni-Ops Slack bot is running (Socket Mode)`
-- In Slack, type `/omni-` → all 11 commands should appear in autocomplete.
+Formatting is handled by Prettier via the root `.prettierrc` — run it before committing. Keep business logic in the API and platform-specific code in the adapters; if you find yourself writing a Prisma query inside a bot, it belongs in a module instead.
 
 ---
 
-## 4. First Run
+## License
 
-### Step 1: Verify API Connection
-
-```text
-/omni-ping
-```
-
-Expected response: `🏓 Pong! Connected to *Your Workspace Name* _(platform: SLACK)_`
-
-### Step 2: Register as Admin
-
-```text
-/omni-employee register
-```
-
-This creates your employee record. If you're the workspace owner, you automatically become Admin.
-
-### Step 3: Configure Workspace
-
-```text
-/omni-config
-```
-
-Click **⚙️ Name** to set your organization name, **🌍 Timezone** (e.g., `Asia/Qatar`), and **💱 Currency** (e.g., `QAR`).
-
-### Step 4: Connect Google (Optional)
-
-1. Ensure `GOOGLE_OAUTH_CLIENT_ID` and `GOOGLE_OAUTH_CLIENT_SECRET` are set on your API service.
-2. In Slack: `/omni-config` → Click **🔗 Connect Google**.
-3. Authorize in the browser. First connect auto-provisions your Calendar and 4 Sheets.
-
-### Step 5: Test Core Features
-
-- **Create a task**: `/omni-task create`
-- **View your tasks**: `/omni-my tasks`
-- **Test AI assistant**: `@Omni-Ops list my open tasks`
-
----
-
-## 5. Troubleshooting
-
-### Commands don't appear in autocomplete
-
-**Cause**: Slash commands not registered in Slack app.
-**Fix**:
-
-1. Go to api.slack.com/apps → your app → App Manifest → Update from manifest.
-2. Install App → reinstall to workspace (yellow banner at top).
-3. Reload Slack client (Ctrl+R / Cmd+R).
-
-### "You are not registered" error
-
-**Cause**: Your Slack account isn't linked to an employee record.
-**Fix**: Run `/omni-employee register`.
-
-### "API error: 404" or "Could not reach API"
-
-**Cause**: `API_URL` is wrong or API service is down.
-**Fix**: Check `API_URL` points to the internal network URL (e.g., `http://omni-ops-api.railway.internal:3000`). Verify `INTERNAL_API_KEY` matches between API and Slack services.
-
-### WhatsApp leads not pushing to channel
-
-**Cause**: `SLACK_BOT_NOTIFY_URL` not set on API, or leads channel not configured.
-**Fix**:
-
-1. API env var: `SLACK_BOT_NOTIFY_URL="http://omni-ops-slack.railway.internal:3001"`
-2. Configure leads channel: Run `/omni-config` inside your `#leads` channel, click the **📢 Leads** button.
-
-### AI assistant returns "not configured"
-
-**Cause**: No AI provider configured for workspace.
-**Fix**: `/omni-config` → Click **🤖 AI** → select provider → enter API key → Save.
-
----
-
-## Command Reference
-
-| Command                                                              | Description                             |
-| -------------------------------------------------------------------- | --------------------------------------- |
-| `/omni-ping`                                                         | Test connectivity                       |
-| `/omni-config`                                                       | Workspace control panel                 |
-| `/omni-employee register`                                            | Register yourself (owner becomes Admin) |
-| `/omni-employee link <email>`                                        | Link Slack account to employee record   |
-| `/omni-employee create/edit/list`                                    | Manage employee records (Manager+)      |
-| `/omni-employee set-admin <user>`                                    | Promote to Admin (Admin only)           |
-| `/omni-task create/list/edit/status/delete`                          | Task management                         |
-| `/omni-appointment add/list/edit/delete`                             | Appointment scheduling                  |
-| `/omni-calendar create/list/edit/delete/sync`                        | Organization events                     |
-| `/omni-invoice create/list/status/delete`                            | Invoicing and payments                  |
-| `/omni-dashboard`                                                    | Management statistics                   |
-| `/omni-my profile/tasks/appointments/performance/reminders`          | Personal workspace                      |
-| `/omni-leads list/add/multi-add/info/assign/status/note/edit/delete` | CRM management                          |
-| `/omni-campaign audience/new/list/send/stop/status/info/recipients`  | WhatsApp campaigns                      |
-| `@Omni-Ops <question>`                                               | AI assistant in channel                 |
-| DM bot                                                               | AI assistant in private chat            |
+MIT — see [LICENSE](LICENSE).
