@@ -24,6 +24,7 @@ const { startScheduler } = require("./cron/scheduler");
 const { startNotifyServer } = require("./notifyServer");
 const assistant = require("./events/assistant");
 const { rememberOrigin } = require("./utils/slackDm");
+const { startDailyReport } = require("./cron/reportsEngine");
 const SCOPES = [
   "app_mentions:read",
   "channels:join",
@@ -216,5 +217,6 @@ app.options("emp", employeeOptions.handleEmployeeOptions);
   await app.start();
   console.log("Omni-Ops Slack bot is running (Socket Mode)");
   startScheduler(app);
+  startDailyReport(app.client); // ← ADD THIS LINE
   startNotifyServer(app.client);
 })();
